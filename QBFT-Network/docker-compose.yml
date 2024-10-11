@@ -1,0 +1,32 @@
+version: '3'
+services:
+  node0:
+    image: your-quorum-image
+    ports:
+      - '30303'
+      - '8546'
+      - '8545'
+    volumes:
+      - >-
+        /mnt/c/Users/atwih/Documents/GitHub/transparent-ordering/QBFT-Network/Node-0/data:/data
+    networks:
+      quorum_network:
+        ipv4_address: 172.16.239.10
+  node1:
+    image: your-quorum-image
+    ports:
+      - '30303'
+      - '8546'
+      - '8545'
+    volumes:
+      - >-
+        /mnt/c/Users/atwih/Documents/GitHub/transparent-ordering/QBFT-Network/Node-1/data:/data
+    networks:
+      quorum_network:
+        ipv4_address: 172.16.239.11
+networks:
+  quorum_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.16.239.0/24
