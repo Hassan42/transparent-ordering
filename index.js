@@ -37,7 +37,6 @@ app.post('/create-network', (req, res) => {
         // Move files to the artifacts directory
         const artifactsPath = path.join(qbftNetworkPath, 'artifacts');
 
-        // Move all files from the dynamically generated output directory to 'artifacts'
         fs.readdirSync(outputDir).forEach(file => {
             const srcPath = path.join(outputDir, file);
             const destPath = path.join(artifactsPath, file);
@@ -53,17 +52,42 @@ app.post('/create-network', (req, res) => {
         const staticNodesPath = path.join(goQuorumDir, 'static-nodes.json');
         let staticNodes = fs.readFileSync(staticNodesPath, 'utf8');
 
-        // Parse the JSON and update nodes with unique IPs and ports
         staticNodes = JSON.parse(staticNodes).map((node, index) => {
-            const nodeIp = `172.16.239.${10 + index}`; // Calculate the correct IP address for each node
-            const updatedNode = node
-                .replace(/<HOST>/g, nodeIp)                // Replace <HOST> with the current node's IP
-                // .replace(/:30303/, `:${NODE_PORT + index}`); // Update the port number
+            const nodeIp = `172.16.239.${10 + index}`;
+            const updatedNode = node.replace(/<HOST>/g, nodeIp);
             return updatedNode;
         });
 
-        // Write the updated array back to the file as a string
         fs.writeFileSync(staticNodesPath, JSON.stringify(staticNodes, null, 2));
+
+        // Create Prometheus configuration file
+        const prometheusConfig = `
+        global:
+          scrape_interval:     15s # Set the scrape interval to every 15 seconds. Default is every 1 minute.
+          evaluation_interval: 15s # Evaluate rules every 15 seconds. The default is every 1 minute.
+        
+        # Alertmanager configuration
+        alerting:
+        #  alertmanagers:
+        #  - static_configs:
+        #    - targets:
+        # - alertmanager:9093
+        
+        # Load rules once and periodically evaluate them according to the global 'evaluation_interval'.
+        rule_files:
+        # - "first_rules.yml"
+        # - "second_rules.yml"
+        
+        scrape_configs:
+        ${Array(NODES_NB).fill(0).map((_, i) => `
+            - job_name: node${i + 1}
+              scrape_interval: 15s
+              scrape_timeout: 10s
+              scheme: http
+              static_configs:
+                - targets: [ 'localhost:${22000 + i}' ]`).join('')}
+        `;
+        fs.writeFileSync(path.join(qbftNetworkPath, 'prometheus.yml'), prometheusConfig);
 
         // Create permissioned nodes and configure ports using full paths
         let dockerCompose = {
@@ -75,83 +99,96 @@ app.post('/create-network', (req, res) => {
             const nodeDataPath = path.join(qbftNetworkPath, `Node-${i}`, 'data');
             const keystorePath = path.join(nodeDataPath, 'keystore');
 
-            // Create directories for node data and keystore
             fs.mkdirSync(nodeDataPath, { recursive: true });
             fs.mkdirSync(keystorePath, { recursive: true });
 
-            // Copy static-nodes.json and genesis.json to each node's data directory
             fs.copyFileSync(staticNodesPath, path.join(nodeDataPath, 'static-nodes.json'));
             fs.copyFileSync(path.join(goQuorumDir, 'genesis.json'), path.join(nodeDataPath, 'genesis.json'));
 
-            // Copy nodekey and address files from each validator directory
             const validatorDir = path.join(artifactsPath, `validator${i}`);
             const nodeKeys = fs.readdirSync(validatorDir).filter(file => file.startsWith('nodekey'));
 
-            // Copy all nodekey files
             nodeKeys.forEach(file => {
                 fs.copyFileSync(path.join(validatorDir, file), path.join(nodeDataPath, file));
             });
 
-            // Copy address file to node
             const addressFile = path.join(validatorDir, 'address');
             if (fs.existsSync(addressFile) && fs.statSync(addressFile).isFile()) {
                 fs.copyFileSync(addressFile, path.join(nodeDataPath, 'address'));
-            } else {
-                console.error(`Address file does not exist or is not a file: ${addressFile}`);
             }
 
-            // Copy account keys to the keystore directory for each node
             const accounts = fs.readdirSync(validatorDir).filter(file => file.startsWith('account'));
             accounts.forEach(file => {
                 fs.copyFileSync(path.join(validatorDir, file), path.join(keystorePath, file));
             });
 
+            const port = 30300 + i;
+            const ws = 32000 + i;
+            const http = 22000 + i;
 
-            // Define the ports for each node
-            const port = 30300 + i;  // Base port for each node
-            const ws = 32000 + i;    // WebSocket port for each node
-            const http = 22000 + i;  // HTTP port for each node
-
-            // Define the Docker service for each node
             dockerCompose.services[`node${i}`] = {
-                image: 'your-quorum-image', // Updated to specified image name
+                image: 'your-quorum-image',
                 ports: [
                     `30303`,   // Map base port for Quorum
                     `8546`,      // Map WebSocket port
-                    `8545`     // Map HTTP port
+                    `${http}:8545`     // Map HTTP port
                 ],
                 volumes: [
-                    `${nodeDataPath}:/data`, // Mount the node data directory
+                    `${nodeDataPath}:/data`,
                 ],
                 networks: {
                     quorum_network: {
-                        ipv4_address: `172.16.239.${10 + i}` // Set static IP for the node
+                        ipv4_address: `172.16.239.${10 + i}`
                     }
                 }
             };
         }
 
-        // Add network configuration
+        // Add Prometheus and Grafana to docker-compose.yml
+        dockerCompose.services['prometheus'] = {
+            image: 'prom/prometheus',
+            ports: ['9090:9090'],
+            volumes: [
+                './prometheus.yml:/etc/prometheus/prometheus.yml'
+            ],
+            networks: {
+                quorum_network: {
+                    ipv4_address: '172.16.239.20'
+                }
+            }
+        };
+
+        dockerCompose.services['grafana'] = {
+            image: 'grafana/grafana',
+            ports: ['3000:3000'],
+            volumes: [
+                './grafana:/var/lib/grafana'
+            ],
+            depends_on: ['prometheus'],
+            networks: {
+                quorum_network: {
+                    ipv4_address: '172.16.239.21'
+                }
+            }
+        };
+
         dockerCompose.networks = {
             quorum_network: {
                 driver: 'bridge',
                 ipam: {
                     config: [{
-                        subnet: '172.16.239.0/24', // Define the subnet for the network
+                        subnet: '172.16.239.0/24',
                     }]
                 }
             }
         };
 
-        // Write the Docker Compose file
         const composeFilePath = path.join(qbftNetworkPath, 'docker-compose.yml');
         fs.writeFileSync(composeFilePath, yaml.dump(dockerCompose));
 
-        // Copy static-nodes.json to permissioned-nodes.json using full paths
         const permissionedNodesPath = path.join(goQuorumDir, 'permissioned-nodes.json');
         fs.copyFileSync(staticNodesPath, permissionedNodesPath);
 
-        // Return success response
         res.json({ message: `Network with ${NODES_NB} nodes created successfully.` });
     } catch (error) {
         console.error(error);
@@ -173,7 +210,7 @@ app.post('/start-network', (req, res) => {
         try {
             // Start the Docker Compose process synchronously
             const result = execSync(`docker-compose -f ${dockerComposeFilePath} up -d`, { cwd: qbftNetworkPath });
-            
+
             res.json({ message: 'Network started successfully.' });
         } catch (error) {
             console.error(`Error starting Docker Compose: ${error.message}`);
@@ -199,7 +236,7 @@ app.post('/stop-network', (req, res) => {
         try {
             // Stop the Docker Compose network
             const stopResult = execSync(`docker-compose -f ${dockerComposeFilePath} down`, { cwd: qbftNetworkPath });
-            
+
             console.log(`Docker Compose stdout (stopped): ${stopResult.toString()}`);
             res.json({ message: 'Network stopped and removed successfully.' });
         } catch (error) {

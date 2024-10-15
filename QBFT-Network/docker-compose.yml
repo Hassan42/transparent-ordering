@@ -5,7 +5,7 @@ services:
     ports:
       - '30303'
       - '8546'
-      - '8545'
+      - '22000:8545'
     volumes:
       - >-
         /mnt/c/Users/atwih/Documents/GitHub/transparent-ordering/QBFT-Network/Node-0/data:/data
@@ -17,13 +17,33 @@ services:
     ports:
       - '30303'
       - '8546'
-      - '8545'
+      - '22001:8545'
     volumes:
       - >-
         /mnt/c/Users/atwih/Documents/GitHub/transparent-ordering/QBFT-Network/Node-1/data:/data
     networks:
       quorum_network:
         ipv4_address: 172.16.239.11
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - '9090:9090'
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      quorum_network:
+        ipv4_address: 172.16.239.20
+  grafana:
+    image: grafana/grafana
+    ports:
+      - '3000:3000'
+    volumes:
+      - ./grafana:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      quorum_network:
+        ipv4_address: 172.16.239.21
 networks:
   quorum_network:
     driver: bridge
