@@ -5,7 +5,6 @@ const path = require('path');
 const Docker = require('dockerode');
 const yaml = require('js-yaml');
 
-
 // Initialize Express
 const app = express();
 const port = 3000;
@@ -18,6 +17,8 @@ const docker = new Docker({ socketPath: '/var/run/docker.sock' });
 app.post('/create-network', (req, res) => {
     try {
         const NODES_NB = req.body.nodes || 3;
+        const nodeTypes = req.body.nodeTypes || Array(NODES_NB).fill('normal'); // default to 'normal' if not provided
+        const censorTargets = req.body.censorTargets || {}; // object mapping node index to array of censor target addresses
         const parentPath = path.dirname(__filename);
 
         console.log("Setting up network...");
@@ -61,33 +62,21 @@ app.post('/create-network', (req, res) => {
         fs.writeFileSync(staticNodesPath, JSON.stringify(staticNodes, null, 2));
 
         // Create Prometheus configuration file
-        const prometheusConfig = `
-        global:
-          scrape_interval:     15s # Set the scrape interval to every 15 seconds. Default is every 1 minute.
-          evaluation_interval: 15s # Evaluate rules every 15 seconds. The default is every 1 minute.
-        
-        # Alertmanager configuration
-        alerting:
-        #  alertmanagers:
-        #  - static_configs:
-        #    - targets:
-        # - alertmanager:9093
-        
-        # Load rules once and periodically evaluate them according to the global 'evaluation_interval'.
-        rule_files:
-        # - "first_rules.yml"
-        # - "second_rules.yml"
-        
-        scrape_configs:
-        ${Array(NODES_NB).fill(0).map((_, i) => `
-            - job_name: node${i + 1}
-              scrape_interval: 15s
-              scrape_timeout: 10s
-              scheme: http
-              static_configs:
-                - targets: [ 'localhost:${22000 + i}' ]`).join('')}
-        `;
-        fs.writeFileSync(path.join(qbftNetworkPath, 'prometheus.yml'), prometheusConfig);
+        // const prometheusConfig = `
+        // global:
+        //   scrape_interval:     15s
+        //   evaluation_interval: 15s
+
+        // scrape_configs:
+        // ${Array(NODES_NB).fill(0).map((_, i) => `
+        //     - job_name: node${i + 1}
+        //       scrape_interval: 15s
+        //       scrape_timeout: 10s
+        //       scheme: http
+        //       static_configs:
+        //         - targets: [ 'localhost:${22000 + i}' ]`).join('')}
+        // `;
+        // fs.writeFileSync(path.join(qbftNetworkPath, 'prometheus.yml'), prometheusConfig);
 
         // Create permissioned nodes and configure ports using full paths
         let dockerCompose = {
@@ -122,9 +111,49 @@ app.post('/create-network', (req, res) => {
                 fs.copyFileSync(path.join(validatorDir, file), path.join(keystorePath, file));
             });
 
-            const port = 30300 + i;
-            const ws = 32000 + i;
-            const http = 22000 + i;
+            // const port = 30300 + i;
+            // const ws = 32000 + i;
+            const http = 8545 + i;
+
+            // Generate start-node.sh
+            const nodeType = nodeTypes[i];
+            const censorTargetAddresses = nodeType === 'censor' ? censorTargets[i] || [] : [];
+
+            let nodeTypeFlag = '';
+            if (nodeType === 'censor') {
+                nodeTypeFlag = `--nodetype censor --censored "[${censorTargetAddresses.join(',')}]"`;
+            } else if (nodeType === 'displace') {
+                nodeTypeFlag = '--nodetype displace';
+            }
+
+            const startNodeScript = `#!/bin/sh
+            geth --datadir /data init /data/genesis.json
+            
+            ACCOUNT_ADDRESS=$(grep -o '"address": *"[^"]*"' ./data/keystore/accountKeystore | grep -o '"[^"]*"$' | sed 's/"//g')
+            echo -n "" > /data/keystore/emptyPassword.txt
+            
+            geth --datadir /data \\
+                --networkid 1337 \\
+                --nodiscover \\
+                --verbosity 5 \\
+                --syncmode full \\
+                --istanbul.blockperiod 5 \\
+                --mine \\
+                --miner.threads 1 \\
+                --miner.gasprice 0 \\
+                --emitcheckpoints \\
+                --http --http.addr 0.0.0.0 --http.port 8545 --http.corsdomain "*" --http.vhosts "*" \\
+                --ws --ws.addr 0.0.0.0 --ws.port 8546 --ws.origins "*" \\
+                --http.api admin,eth,debug,miner,net,txpool,personal,web3,istanbul \\
+                --ws.api admin,eth,debug,miner,net,txpool,personal,web3,istanbul \\
+                --unlock "$ACCOUNT_ADDRESS" \\
+                --allow-insecure-unlock \\
+                --password /data/keystore/emptyPassword.txt \\
+                --port 30303 \\
+                --ipcpath /tmp/geth.ipc \\
+                ${nodeTypeFlag}
+            `;
+            fs.writeFileSync(path.join(qbftNetworkPath, `Node-${i}`, 'data', 'start-node.sh'), startNodeScript);
 
             dockerCompose.services[`node${i}`] = {
                 image: 'your-quorum-image',
@@ -140,37 +169,37 @@ app.post('/create-network', (req, res) => {
                     quorum_network: {
                         ipv4_address: `172.16.239.${10 + i}`
                     }
-                }
+                },
+                entrypoint: '/data/start-node.sh'
             };
         }
 
-        // Add Prometheus and Grafana to docker-compose.yml
-        dockerCompose.services['prometheus'] = {
-            image: 'prom/prometheus',
-            ports: ['9090:9090'],
-            volumes: [
-                './prometheus.yml:/etc/prometheus/prometheus.yml'
-            ],
-            networks: {
-                quorum_network: {
-                    ipv4_address: '172.16.239.20'
-                }
-            }
-        };
+        // dockerCompose.services['prometheus'] = {
+        //     image: 'prom/prometheus',
+        //     ports: ['9090:9090'],
+        //     volumes: [
+        //         './prometheus.yml:/etc/prometheus/prometheus.yml'
+        //     ],
+        //     networks: {
+        //         quorum_network: {
+        //             ipv4_address: '172.16.239.20'
+        //         }
+        //     }
+        // };
 
-        dockerCompose.services['grafana'] = {
-            image: 'grafana/grafana',
-            ports: ['3000:3000'],
-            volumes: [
-                './grafana:/var/lib/grafana'
-            ],
-            depends_on: ['prometheus'],
-            networks: {
-                quorum_network: {
-                    ipv4_address: '172.16.239.21'
-                }
-            }
-        };
+        // dockerCompose.services['grafana'] = {
+        //     image: 'grafana/grafana',
+        //     ports: ['3000:3000'],
+        //     volumes: [
+        //         './grafana:/var/lib/grafana'
+        //     ],
+        //     depends_on: ['prometheus'],
+        //     networks: {
+        //         quorum_network: {
+        //             ipv4_address: '172.16.239.21'
+        //         }
+        //     }
+        // };
 
         dockerCompose.networks = {
             quorum_network: {
@@ -186,8 +215,8 @@ app.post('/create-network', (req, res) => {
         const composeFilePath = path.join(qbftNetworkPath, 'docker-compose.yml');
         fs.writeFileSync(composeFilePath, yaml.dump(dockerCompose));
 
-        const permissionedNodesPath = path.join(goQuorumDir, 'permissioned-nodes.json');
-        fs.copyFileSync(staticNodesPath, permissionedNodesPath);
+        // const permissionedNodesPath = path.join(goQuorumDir, 'permissioned-nodes.json');
+        // fs.copyFileSync(staticNodesPath, permissionedNodesPath);
 
         res.json({ message: `Network with ${NODES_NB} nodes created successfully.` });
     } catch (error) {
@@ -248,6 +277,8 @@ app.post('/stop-network', (req, res) => {
         res.status(500).json({ message: 'An error occurred while stopping the network.', error: error.message });
     }
 });
+
+
 
 // Start the server
 app.listen(port, () => {
