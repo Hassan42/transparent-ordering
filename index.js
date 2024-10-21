@@ -19,7 +19,18 @@ app.post('/create-network', (req, res) => {
         const NODES_NB = req.body.nodes || 3;
         const nodeTypes = req.body.nodeTypes || Array(NODES_NB).fill('normal'); // default to 'normal' if not provided
         const censorTargets = req.body.censorTargets || {}; // object mapping node index to array of censor target addresses
+        const roles = req.body.roles;
         const parentPath = path.dirname(__filename);
+
+        // Check if roles array is empty or undefined
+        if (!roles || roles.length === 0) {
+            return res.status(400).json({ message: 'Roles array is required and cannot be empty.' });
+        }
+
+        // Ensure the length of roles matches the number of nodes
+        if (roles.length !== NODES_NB) {
+            return res.status(400).json({ message: 'The number of roles must match the number of nodes.' });
+        }
 
         console.log("Setting up network...");
 
@@ -31,7 +42,7 @@ app.post('/create-network', (req, res) => {
         fs.mkdirSync(qbftNetworkPath);
 
         // Generate genesis file in the new directory
-        const genesisCmd = `yes | npx quorum-genesis-tool --consensus qbft --chainID 1337 --blockperiod 1 --emptyBlockPeriod 1 --requestTimeout 10 --epochLength 30000 --difficulty 1 --gasLimit '0xFFFFFF' --coinbase '0x0000000000000000000000000000000000000000' --validators ${NODES_NB} --members 0 --bootnodes 0 --outputPath '${path.join(qbftNetworkPath, 'artifacts')}'`;
+        const genesisCmd = `yes | npx quorum-genesis-tool --consensus qbft --chainID 1337 --blockperiod 10 --emptyBlockPeriod 1 --requestTimeout 10 --epochLength 30000 --difficulty 1 --gasLimit '0xFFFFFF' --coinbase '0x0000000000000000000000000000000000000000' --validators ${NODES_NB} --members 0 --bootnodes 0 --outputPath '${path.join(qbftNetworkPath, 'artifacts')}'`;
 
         const outputDir = execSync(genesisCmd).toString().split('\n').find(line => line.includes("artifacts/")).split(' ')[3];
 
@@ -155,6 +166,13 @@ app.post('/create-network', (req, res) => {
             `;
             fs.writeFileSync(path.join(qbftNetworkPath, `Node-${i}`, 'data', 'start-node.sh'), startNodeScript);
 
+            // Store role and node type in nodeConfig.json
+            const nodeConfig = {
+                role: roles[i],
+                nodeType: nodeType
+            };
+            fs.writeFileSync(path.join(nodeDataPath, 'nodeConfig.json'), JSON.stringify(nodeConfig, null, 2));
+
             dockerCompose.services[`node${i}`] = {
                 image: 'your-quorum-image',
                 ports: [
@@ -277,8 +295,6 @@ app.post('/stop-network', (req, res) => {
         res.status(500).json({ message: 'An error occurred while stopping the network.', error: error.message });
     }
 });
-
-
 
 // Start the server
 app.listen(port, () => {
