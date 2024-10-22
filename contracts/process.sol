@@ -41,7 +41,15 @@ contract Process_Contract {
         LocalData localData;
         mapping(string => State) state;
         mapping(address => string) addressToRole;
+        mapping(string => TaskParticipants) taskParticipants;
     }
+
+    struct TaskParticipants {
+        address sender;
+        address receiver;
+    }
+
+    mapping(string => TaskParticipants) public taskParticipants;
 
     mapping(uint => Instance) public intances;
 
@@ -83,12 +91,29 @@ contract Process_Contract {
         intances[instanceID].state[_activity] = State(_state);
     }
 
+    function setTaskParticipants(
+        uint instanceID,
+        string memory taskName,
+        address sender,
+        address receiver
+    ) public {
+        intances[instanceID].taskParticipants[taskName] = TaskParticipants(
+            sender,
+            receiver
+        );
+    }
+
     function getState(
         uint instanceID,
         string memory _activity
     ) public view returns (State) {
         return intances[instanceID].state[_activity];
     }
+
+    function getParticipantsByTask(
+        uint instance,
+        string memory task_name
+    ) external view returns (address[] memory) {}
 
     //Reset data each new epoch
     function resetData() public {
