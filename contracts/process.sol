@@ -49,8 +49,7 @@ contract Process_Contract {
 
     GlobalData public globalData;
 
-    constructor() {
-    }
+    constructor() {}
 
     function setResources(
         uint instanceID,
@@ -92,9 +91,11 @@ contract Process_Contract {
     }
 
     //Reset data each new epoch
-    function resetData(uint instanceID) public {
-        intances[instanceID].localData.supplies = 1;
-        intances[instanceID].localData.requestCount = 0;
+    function resetData() public {
+        for (uint i = 0; i < instancesCount; i++) {
+            intances[i].localData.supplies = 1;
+        }
+        globalData.requestCount = 0;
     }
 
     function compareStrings(
@@ -105,7 +106,6 @@ contract Process_Contract {
     }
 
     function calculatePrice() internal view returns (uint256) {
-        
         uint256 priceIncrease;
 
         // Check if there are multiple requests
@@ -126,16 +126,11 @@ contract Process_Contract {
 
     function PurchaseOrder(
         uint instanceID
-    ) public isAccessible("PurchaseOrder", "Customer") {
-
+    ) public isAccessible(instanceID, "PurchaseOrder", "Customer") {
         if (intances[instanceID].localData.supplies > 0) {
-
             intances[instanceID].state["ConfirmOrder"] = State.Open;
-
         } else {
-
             intances[instanceID].state["RestockRequest"] = State.Open;
-
         }
 
         intances[instanceID].state["PurchaseOrder"] = State.Completed;
@@ -143,17 +138,18 @@ contract Process_Contract {
 
     function ConfirmOrder(
         uint instanceID
-    ) public isAccessible("PurchaseOrder", "Customer") {
-
+    ) public isAccessible(instanceID, "ConfirmOrder", "Customer") {
         intances[instanceID].state["ConfirmOrder"] = State.Completed;
-
     }
 
     function RestockRequest(
         uint instanceID
-    ) public isAccessible("PurchaseOrder", "Customer") returns (uint256) {
-
-        intances[instanceID].localData.requestCount++;
+    )
+        public
+        isAccessible(instanceID, "RestockRequest", "Customer")
+        returns (uint256)
+    {
+        globalData.requestCount++;
 
         uint256 newPrice = calculatePrice();
 
@@ -168,12 +164,17 @@ contract Process_Contract {
 
     function ConfirmRestock(
         uint instanceID
-    ) public isAccessible("PurchaseOrder", "Customer") {
-
+    ) public isAccessible(instanceID, "ConfirmRestock", "Customer") {
         intances[instanceID].localData.supplies = 1;
 
         intances[instanceID].state["ConfirmOrder"] = State.Open;
 
         intances[instanceID].state["ConfirmRestock"] = State.Completed;
+    }
+
+    function CancelOrder(
+        uint instanceID
+    ) public isAccessible(instanceID, "CancelOrder", "Customer") {
+        intances[instanceID].state["CancelOrder"] = State.Completed;
     }
 }
