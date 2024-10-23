@@ -38,8 +38,8 @@
       ]
     },
     "/mnt/c/Users/atwih/Documents/GitHub/transparent-ordering/contracts/OrderingContract.sol": {
-      "lastModificationDate": 1729626994055,
-      "contentHash": "29098df2f17e0e901a8b19e60880bb95",
+      "lastModificationDate": 1729714659336,
+      "contentHash": "0da7bab62f4a3242aeddd007cd571b21",
       "sourceName": "contracts/OrderingContract.sol",
       "solcConfig": {
         "version": "0.8.27",

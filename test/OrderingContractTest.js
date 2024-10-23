@@ -36,11 +36,14 @@ describe("OrderingContract", function () {
 
         await mine(5); // skip two blocks to unlock voting
 
+        // console.log(await orderingContract.getDomainByIndex(1));
+
         // Voter orders the interactions
-        await orderingContract.connect(voter).orderInteraction([0, 1]); // Pass the indices of interactions to reorder
+        await orderingContract.connect(voter).orderInteraction(1, [0, 1]); // Pass the indices of interactions to reorder
         // Check if the index block is reset to 0 after voting
         const indexBlock = await orderingContract.index_block();
         expect(indexBlock).to.equal(0);
+
     });
 
     it("should order isolated interactions correctly", async function () {
@@ -72,25 +75,34 @@ describe("OrderingContract", function () {
             orderingContract.connect(sender2).submitInteraction(3, "PurchaseOrder"), // customer2 -> store2
         ]);
 
-        await mine(2); // Skip two blocks to unlock voting
+        await mine(5); // Skip two blocks to unlock voting
+
+        const domain_before_voting = await orderingContract.getDomainByIndex(1);
 
         // Check the orderers count
-        const orderersCount = await orderingContract.orderers_count();
+        const orderersCount = domain_before_voting[2];
 
         // Assert that the orderers count is 4
         expect(orderersCount).to.equal(4);
 
         // Voter orders the interactions
-        await orderingContract.connect(sender1).orderInteraction([0, 2]);
-        await orderingContract.connect(sender2).orderInteraction([1, 3]); 
-        await orderingContract.connect(sender3).orderInteraction([0, 1]); 
+        await orderingContract.connect(sender1).orderInteraction(1, [0, 2]);
+        await orderingContract.connect(sender2).orderInteraction(1, [1, 3]); 
+        await orderingContract.connect(sender3).orderInteraction(1, [0, 1]);
+
+        const domain_after_voting = await orderingContract.getDomainByIndex(1);
+
+        // Check the voters count
+        const voterCount = domain_after_voting[1];
+
+        // Assert that the orderers count is 4
+        expect(voterCount).to.equal(3);
+
 
         // Expecting a conflict when sender4 orders interactions that would conflict
-        await expect(orderingContract.connect(sender4).orderInteraction([3, 2])) // Expect a conflict
+        await expect(orderingContract.connect(sender4).orderInteraction(1, [3, 2])) // Expect a conflict
             .to.emit(orderingContract, "Conflict"); // Check that Conflict event is emitted 
 
     });
-
-
 
 });
