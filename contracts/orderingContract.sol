@@ -9,6 +9,7 @@ contract OrderingContract {
 
     uint public block_interval = 5;
     uint public index_block = 0;
+    uint public domain_count = 0;
 
     struct Interaction {
         uint instance;
@@ -27,9 +28,10 @@ contract OrderingContract {
     struct Domain {
         uint id;
         DomainStatus status;
-        Orderer[] orderers;
+        mapping(address => Orderer) orderers;
         uint vote_count;
         uint[] ordered_interactions;
+        uint orderers_count;
     }
 
     enum DomainStatus {
@@ -39,9 +41,7 @@ contract OrderingContract {
     }
 
     Interaction[] public pending_interactions;
-
     Domain[] public domains;
-    uint public domain_count = 0;
 
     event Conflict(uint indexed domain, uint[2] transactions);
 
@@ -58,6 +58,7 @@ contract OrderingContract {
         process = IProcessContract(processContractAddress);
     }
 
+    // Function to submit an interaction for ordering
     function submitInteraction(uint instance, string memory task) external {
         if (index_block == 0) {
             index_block = block.number;
@@ -84,271 +85,160 @@ contract OrderingContract {
             })
         );
 
-        update_domains();
-        update_orderers();
+        updateDomains();
+        updateOrderers();
     }
 
-    function update_orderers() internal {
-        // Selecting strategy for selecting orderers
-        intermediate_orderer();
-    }
-
-    function intermediate_orderer() internal {
-
+    // Internal function to update orderers
+    function updateOrderers() internal {
         for (uint i = 0; i < pending_interactions.length; i++) {
             address sender = pending_interactions[i].sender;
             address receiver = pending_interactions[i].receiver;
             uint domainID = pending_interactions[i].domain;
 
-            // Check for sender in the rest of the interactions
-            for (uint j = 0; j < pending_interactions.length; j++) {
-                if (i == j) {
-                    continue;
-                }
-
-                // Check if the sender matches either the sender or receiver of another interaction
-                if (
-                    sender == pending_interactions[j].sender ||
-                    sender == pending_interactions[j].receiver
-                ) {
-                    if (!isOrderer(domainID, sender)) {
-                        getDomainById(domainID).orderers.push(
-                            Orderer(sender, false)
-                        );
-                    }
-                    break; // No need to check further once sender is added
-                }
-            }
-
-            // Check for receiver in the rest of the interactions
-            for (uint j = 0; j < pending_interactions.length; j++) {
-                if (i == j) {
-                    continue;
-                }
-
-                // Check if the receiver matches either the sender or receiver of another interaction
-                if (
-                    receiver == pending_interactions[j].sender ||
-                    receiver == pending_interactions[j].receiver
-                ) {
-                    if (!isOrderer(domainID, receiver)) {
-                        getDomainById(domainID).orderers.push(
-                            Orderer(receiver, false)
-                        );
-                    }
-                    break; // No need to check further once receiver is added
-                }
-            }
+            // Check for sender and receiver in the rest of the interactions
+            checkForOrderer(domainID, sender);
+            checkForOrderer(domainID, receiver);
         }
     }
 
-    function isOrderer(
-        uint domainId,
-        address user
-    ) internal view returns (bool) {
-        // Retrieve the domain by ID using the getDomainById function
-        Domain memory domain = getDomainById(domainId);
-
-        // Loop through the orderers in the domain to check if the address is present
-        for (uint i = 0; i < domain.orderers.length; i++) {
-            if (domain.orderers[i].ordererAddress == user) {
-                return true; // Return true if the address is found in the list of orderers
-            }
-        }
-
-        return false; // Return false if the address is not in the orderers list
-    }
-
-    // Check if all domains are ready to be executed
-    function checkAllDomainsStatus() internal returns (bool) {
-        bool allCompletedOrConflict = true;
-
-        for (uint i = 0; i < domains.length; i++) {
+    // Helper function to check and add orderer
+    function checkForOrderer(uint domainID, address user) internal {
+        for (uint i = 0; i < pending_interactions.length; i++) {
             if (
-                domains[i].status != DomainStatus.Completed &&
-                domains[i].status != DomainStatus.Conflict
+                user == pending_interactions[i].sender ||
+                user == pending_interactions[i].receiver
             ) {
-                allCompletedOrConflict = false;
+                if (!isOrderer(domainID, user)) {
+                    domains[domainID].orderers[user] = Orderer(user, false);
+                    domains[domainID].orderers_count++;
+                }
                 break;
             }
         }
-
-        return allCompletedOrConflict;
     }
 
-    function orderInteraction(
-        uint domainId,
-        uint[] calldata indicesToReorder
-    ) external duringVote {
-        require(
-            indicesToReorder.length > 1,
-            "Need at least two indices to reorder"
-        );
+    // Helper function to check if a user is an orderer
+    function isOrderer(uint domainId, address user) internal view returns (bool) {
+        return domains[domainId].orderers[user].ordererAddress == user;
+    }
 
-        // Retrieve the domain by ID
-        Domain storage domain = getDomainById(domainId);
+    // Function to order interactions within a domain
+    function orderInteraction(uint domainId, uint[] calldata indicesToReorder) external duringVote {
+        require(indicesToReorder.length > 1, "Need at least two indices to reorder");
 
-        // Validate all provided indices are within bounds and not duplicated
+        Domain storage domain = domains[domainId];
         bool[] memory reorderedFlags = new bool[](pending_interactions.length);
-        for (uint i = 0; i < indicesToReorder.length; i++) {
-            uint index = indicesToReorder[i];
-            require(
-                index < pending_interactions.length,
-                "Invalid interaction ID"
-            );
-            require(
-                !reorderedFlags[index],
-                "Duplicate interaction ID in the order"
-            );
-            reorderedFlags[index] = true;
-        }
-
         domain.vote_count++;
 
-        // Check for conflicts and store interactions in ordered_interactions of the domain
         uint anchorIndex = 0;
-        uint existingIndex = 0;
-
         for (uint i = 0; i < indicesToReorder.length; i++) {
             uint currentIndex = indicesToReorder[i];
 
-            // Check if the interaction exists in domain's ordered_interactions
-            bool existsInOrdered = false;
-            for (uint j = 0; j < domain.ordered_interactions.length; j++) {
-                if (domain.ordered_interactions[j] == currentIndex) {
-                    existsInOrdered = true;
-                    existingIndex = j;
-                    break;
-                }
+            require(currentIndex < pending_interactions.length, "Invalid interaction ID");
+            require(!reorderedFlags[currentIndex], "Duplicate interaction ID in the order");
+            reorderedFlags[currentIndex] = true;
+
+            if (isConflict(domain, currentIndex, anchorIndex)) {
+                domain.status = DomainStatus.Conflict;
+                break;
             }
 
-            // If interaction is found, check for conflicts
-            if (existsInOrdered) {
-                if (existingIndex >= anchorIndex) {
-                    anchorIndex = existingIndex;
-                } else {
-                    // Conflict detected between ordered interactions
-                    Interaction
-                        memory conflictingInteraction1 = pending_interactions[
-                            domain.ordered_interactions[anchorIndex]
-                        ];
-                    Interaction
-                        memory conflictingInteraction2 = pending_interactions[
-                            domain.ordered_interactions[existingIndex]
-                        ];
-
-                    // Flag conflicting domain
-                    domain.status = DomainStatus.Conflict;
-
-                    // emit Conflict(
-                    //     domain.id,
-                    //     [conflictingInteraction1.id, conflictingInteraction2.id]
-                    // );
-
-                    break;
-                }
-            } else {
-                // Add interaction to ordered_interactions if it doesn't exist
-                domain.ordered_interactions.push(currentIndex);
-            }
+            domain.ordered_interactions.push(currentIndex);
         }
 
-        if (domain.vote_count == domain.orderers.length) {
+        if (domain.vote_count == domain.orderers_count) {
             domain.status = DomainStatus.Completed;
         }
 
-        bool domainStatus = checkAllDomainsStatus();
-
-        if (domainStatus) {}
+        if (checkAllDomainsStatus()) {
+            // Logic to execute all domains
+            resetData();
+        }
     }
 
-    function executeInteractions() internal {
-        reset_data();
+    // Helper function to check for conflicts
+    function isConflict(Domain storage domain, uint currentIndex, uint anchorIndex) internal view returns (bool) {
+        for (uint j = 0; j < domain.ordered_interactions.length; j++) {
+            if (domain.ordered_interactions[j] == currentIndex) {
+                return j < anchorIndex;
+            }
+        }
+        return false;
     }
 
-    // Function to generate domains based on common senders or receivers
-    function update_domains() internal {
+    // Internal function to update domains for pending interactions
+    function updateDomains() internal {
         for (uint i = 0; i < pending_interactions.length; i++) {
             Interaction memory current_interaction = pending_interactions[i];
             uint domainId = current_interaction.domain;
 
             if (domainId == 0) {
-                bool matched = false;
-
-                for (uint j = 0; j < pending_interactions.length; j++) {
-                    if (i != j) {
-                        Interaction
-                            memory next_interaction = pending_interactions[j];
-
-                        address current_sender = current_interaction.sender;
-                        address current_receiver = current_interaction.receiver;
-
-                        address next_sender = next_interaction.sender;
-                        address next_receiver = next_interaction.receiver;
-
-                        // Check if the sender or receiver matches for the interactions
-                        if (
-                            current_sender == next_sender ||
-                            current_sender == next_receiver ||
-                            current_receiver == next_sender ||
-                            current_receiver == next_receiver
-                        ) {
-                            pending_interactions[i].domain = domainId; // Assign the same domain
-                            matched = true;
-                            break;
-                        }
-                    }
-                }
-
-                // If no match is found, create a new domain
-                if (!matched) {
-                    Domain memory newDomain;
-                    pending_interactions[i].domain = ++domain_count;
-                    newDomain.id = domain_count;
-                    newDomain.status = DomainStatus.Pending;
-                    domains.push(newDomain);
-                }
+                domainId = findOrCreateDomain(i);
+                pending_interactions[i].domain = domainId;
             }
         }
     }
 
-    function getDomainById(
-        uint domainId
-    ) internal view returns (Domain memory) {
+    // Helper function to find or create a domain
+    function findOrCreateDomain(uint interactionIndex) internal returns (uint) {
+        Interaction memory current_interaction = pending_interactions[interactionIndex];
+        for (uint j = 0; j < pending_interactions.length; j++) {
+            if (interactionIndex != j) {
+                Interaction memory next_interaction = pending_interactions[j];
+                if (
+                    current_interaction.sender == next_interaction.sender ||
+                    current_interaction.sender == next_interaction.receiver ||
+                    current_interaction.receiver == next_interaction.sender ||
+                    current_interaction.receiver == next_interaction.receiver
+                ) {
+                    return next_interaction.domain;
+                }
+            }
+        }
+
+        domain_count++;
+        Domain storage newDomain = domains[domain_count];
+        newDomain.id = domain_count;
+        newDomain.status = DomainStatus.Pending;
+        return domain_count;
+    }
+
+    // Function to check if all domains are either completed or in conflict
+    function checkAllDomainsStatus() internal view returns (bool) {
         for (uint i = 0; i < domains.length; i++) {
-            if (domains[i].id == domainId) {
-                return domains[i]; // Return the domain with the matching ID
+            if (domains[i].status == DomainStatus.Pending) {
+                return false;
             }
         }
-
-        revert("Domain with the given ID not found");
+        return true;
     }
 
+    // Function to release interactions for execution
     function release() external {
-        // Check if the index block is set and if the block interval has passed
         require(
             index_block != 0 &&
-                block.number >= index_block + block_interval &&
-                domain_count >= 1,
-            "Cannot Release"
+            block.number >= index_block + block_interval &&
+            domain_count >= 1,
+            "Cannot release"
         );
 
-        // Check if all domains have zero orderers
         for (uint i = 0; i < domains.length; i++) {
-            require(
-                domains[i].orderers.length == 0,
-                "Not all domains have zero orderers"
-            );
+            require(domains[i].orderers_count == 0, "Not all domains have zero orderers");
         }
 
-        // If the check passes, execute interactions
         executeInteractions();
     }
 
-    function reset_data() internal {
+    // Internal function to execute interactions and reset contract data
+    function executeInteractions() internal {
+        resetData();
+    }
+
+    // Internal function to reset contract data
+    function resetData() internal {
         delete domains;
         delete pending_interactions;
-
         domain_count = 0;
         index_block = 0;
     }
