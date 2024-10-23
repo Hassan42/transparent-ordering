@@ -90,3 +90,5 @@ dist
 .vscode/
 
 QBFT-Network/
+artifacts/
+cache/
