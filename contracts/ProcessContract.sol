@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-contract Process_Contract {
+contract ProcessContract {
     enum State {
         Closed,
         Open,
@@ -10,18 +10,14 @@ contract Process_Contract {
 
     modifier isAccessible(
         uint instanceID,
-        string memory _activity,
-        string memory _role
+        string memory _activity
     ) {
         require(
             intances[instanceID].state[_activity] == State.Open,
             "Activity is not open"
         );
         require(
-            compareStrings(
-                intances[instanceID].addressToRole[msg.sender],
-                _role
-            ),
+            intances[instanceID].taskParticipants[_activity].sender == msg.sender,
             "Caller does not have the required role"
         );
         _;
@@ -40,7 +36,6 @@ contract Process_Contract {
     struct Instance {
         LocalData localData;
         mapping(string => State) state;
-        mapping(address => string) addressToRole;
         mapping(string => TaskParticipants) taskParticipants;
     }
 
@@ -49,8 +44,6 @@ contract Process_Contract {
         address receiver;
     }
 
-    mapping(string => TaskParticipants) public taskParticipants;
-
     mapping(uint => Instance) public intances;
 
     uint public instancesCount;
@@ -58,29 +51,6 @@ contract Process_Contract {
     GlobalData public globalData;
 
     constructor() {}
-
-    function setResources(
-        uint instanceID,
-        string[] memory _roles,
-        address[] memory _addresses
-    ) public {
-        require(
-            _roles.length == _addresses.length,
-            "Roles and addresses arrays must be of the same length"
-        );
-
-        for (uint i = 0; i < _addresses.length; i++) {
-            intances[instanceID].addressToRole[_addresses[i]] = _roles[i];
-        }
-    }
-
-    function setResource(
-        uint instanceID,
-        string memory _role,
-        address _address
-    ) public {
-        intances[instanceID].addressToRole[_address] = _role;
-    }
 
     function setState(
         uint instanceID,
@@ -91,7 +61,7 @@ contract Process_Contract {
         intances[instanceID].state[_activity] = State(_state);
     }
 
-    function setTaskParticipants(
+    function setParticipantsByTask(
         uint instanceID,
         string memory taskName,
         address sender,
@@ -111,9 +81,13 @@ contract Process_Contract {
     }
 
     function getParticipantsByTask(
-        uint instance,
-        string memory task_name
-    ) external view returns (address[] memory) {}
+        uint instanceID,
+        string memory taskName
+    ) public view returns (address sender, address receiver) {
+        TaskParticipants memory participants = intances[instanceID]
+            .taskParticipants[taskName];
+        return (participants.sender, participants.receiver);
+    }
 
     //Reset data each new epoch
     function resetData() public {
@@ -151,7 +125,7 @@ contract Process_Contract {
 
     function PurchaseOrder(
         uint instanceID
-    ) public isAccessible(instanceID, "PurchaseOrder", "Customer") {
+    ) public isAccessible(instanceID, "PurchaseOrder") {
         if (intances[instanceID].localData.supplies > 0) {
             intances[instanceID].state["ConfirmOrder"] = State.Open;
         } else {
@@ -163,7 +137,7 @@ contract Process_Contract {
 
     function ConfirmOrder(
         uint instanceID
-    ) public isAccessible(instanceID, "ConfirmOrder", "Customer") {
+    ) public isAccessible(instanceID, "ConfirmOrder") {
         intances[instanceID].state["ConfirmOrder"] = State.Completed;
     }
 
@@ -171,7 +145,7 @@ contract Process_Contract {
         uint instanceID
     )
         public
-        isAccessible(instanceID, "RestockRequest", "Customer")
+        isAccessible(instanceID, "RestockRequest")
         returns (uint256)
     {
         globalData.requestCount++;
@@ -189,7 +163,7 @@ contract Process_Contract {
 
     function ConfirmRestock(
         uint instanceID
-    ) public isAccessible(instanceID, "ConfirmRestock", "Customer") {
+    ) public isAccessible(instanceID, "ConfirmRestock") {
         intances[instanceID].localData.supplies = 1;
 
         intances[instanceID].state["ConfirmOrder"] = State.Open;
@@ -199,7 +173,7 @@ contract Process_Contract {
 
     function CancelOrder(
         uint instanceID
-    ) public isAccessible(instanceID, "CancelOrder", "Customer") {
+    ) public isAccessible(instanceID, "CancelOrder") {
         intances[instanceID].state["CancelOrder"] = State.Completed;
     }
 }
