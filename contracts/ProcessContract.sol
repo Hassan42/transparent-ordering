@@ -8,16 +8,14 @@ contract ProcessContract {
         Completed
     }
 
-    modifier isAccessible(
-        uint instanceID,
-        string memory _activity
-    ) {
+    modifier isAccessible(uint instanceID, string memory _activity) {
         require(
             intances[instanceID].state[_activity] == State.Open,
             "Activity is not open"
         );
         require(
-            intances[instanceID].taskParticipants[_activity].sender == msg.sender,
+            intances[instanceID].taskParticipants[_activity].sender ==
+                msg.sender,
             "Caller does not have the required role"
         );
         _;
@@ -59,6 +57,35 @@ contract ProcessContract {
     ) public {
         require(_state <= 3, "Not Valid State");
         intances[instanceID].state[_activity] = State(_state);
+    }
+
+    function setParticipants(
+        uint instanceID,
+        address[] memory participants
+    ) public {
+        address customer = participants[0];
+        address retailer = participants[1];
+        address manufacturer = participants[2];
+
+        intances[instanceID].taskParticipants[
+            "PurchaseOrder"
+        ] = TaskParticipants(customer, retailer);
+
+        intances[instanceID].taskParticipants[
+            "ConfirmOrder"
+        ] = TaskParticipants(retailer, customer);
+
+        intances[instanceID].taskParticipants[
+            "RestockRequest"
+        ] = TaskParticipants(retailer, manufacturer);
+
+        intances[instanceID].taskParticipants[
+            "ConfirmRestock"
+        ] = TaskParticipants(manufacturer, retailer);
+
+        intances[instanceID].taskParticipants[
+            "CancelOrder"
+        ] = TaskParticipants(customer, retailer);
     }
 
     function setParticipantsByTask(
@@ -143,11 +170,7 @@ contract ProcessContract {
 
     function RestockRequest(
         uint instanceID
-    )
-        public
-        isAccessible(instanceID, "RestockRequest")
-        returns (uint256)
-    {
+    ) public isAccessible(instanceID, "RestockRequest") returns (uint256) {
         globalData.requestCount++;
 
         uint256 newPrice = calculatePrice();

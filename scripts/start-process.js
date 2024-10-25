@@ -1,54 +1,62 @@
 const hre = require("hardhat");
 const { ethers } = require("hardhat");
 const { getParticipants } = require('./helper');
+const fs = require('fs');
+const path = require('path');
 
 
 async function main() {
-    // Call the function to retrieve participant keys
-    const participantKeys = await getParticipants();
 
-    console.log('Participant:', participantKeys);
+    const parentPath = path.dirname(__filename);
+    const processInstancesPath = path.join(parentPath, '..', 'QBFT-Network', 'processInstances.json');
 
-    // Define the recipient address (this can be a blank address or any valid address)
-    const recipientAddress = '0x0000000000000000000000000000000000000000'; // Replace with a valid address if needed
-    const amountToSend = ethers.parseEther("0.01"); // Adjust the amount as needed
-
-    // Create an array to hold transaction promises
-    const transactionPromises = [];
-
-    // Loop through each participant and send a transaction
-    for (const [role, { node, publicKey, privateKey }] of Object.entries(participantKeys)) {
-        // Create a wallet instance from the private key
-        const wallet = new ethers.Wallet(privateKey, hre.ethers.provider);
-
-        const balance = await hre.ethers.provider.getBalance(wallet.address);
-        console.log(`Balance for ${role} (${publicKey}):`, ethers.formatEther(balance), "ETH");
-
-        // Create a transaction object
-        const tx = {
-            to: recipientAddress,
-            value: amountToSend,
-            gasLimit: 21000, // Standard gas limit for a simple ETH transfer
-        };
-
-        // Send the transaction and push the promise to the array
-        const txPromise = wallet.sendTransaction(tx)
-            .then(txResponse => {
-                console.log(`Transaction sent from ${publicKey} (${role}):`, txResponse.hash);
-                return txResponse.wait().then(() => {
-                    console.log(`Transaction ${txResponse.hash} mined successfully.`);
-                });
-            })
-            .catch(error => {
-                console.error(`Error sending transaction for ${role}:`, error);
-            });
-
-        transactionPromises.push(txPromise);
+    if (!fs.existsSync(processInstancesPath)) {
+        console.error('processInstances.json not found at:', processInstancesPath);
+        return;
     }
 
-    // Wait for all transactions to complete
-    await Promise.all(transactionPromises);
-    console.log('All transactions have been processed.');
+    // Call the function to retrieve participant keys and roles
+    const participants = await getParticipants();
+
+    console.log('Participants:', participants);
+
+    // Read the processInstances.json file
+    const processInstancesData = fs.readFileSync(processInstancesPath, 'utf8');
+    const processInstances = JSON.parse(processInstancesData).processInstances;
+
+    // Check each process instance against the participants object using roles
+    const allRolesMatch = processInstances.every(instance => {
+        return instance.every(role => {
+            // Check if the role exists in the participants object
+            if (participants[role]) {
+                return true;
+            } else {
+                console.log(`Role ${role} not found`);
+                return false;
+            }
+        });
+    });
+
+    if (allRolesMatch) {
+        console.log('All roles match.');
+    } else {
+        console.error('Mismatch in roles.');
+        return;
+    }
+
+    // Deploy ProcessContract
+    const ProcessContract = await ethers.getContractFactory("ProcessContract");
+    const processContract = await ProcessContract.deploy();
+    console.log(`ProcessContract deployed at: ${processContract.target}`);
+
+    // Deploy OrderingContract
+    const OrderingContract = await ethers.getContractFactory("OrderingContract");
+    const orderingContract = await OrderingContract.deploy(processContract.target);
+    console.log(`OrderingContract deployed at: ${orderingContract.target}`);
+
+    await processContract.setParticipants(0, [participants.cusomter1.publicKey, participants.retailer1.publicKey, participants.manufacturer1.publicKey]);
+    
+
 }
 
 main().catch((error) => {

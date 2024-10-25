@@ -62,7 +62,6 @@ describe("OrderingContract", function () {
         expect(indexBlock).to.equal(0);
     });
 
-
     it("should detect conflicts", async function () {
         // Accounts for senders and voter
         const [sender1, sender2, sender3, sender4] = accounts;
@@ -87,7 +86,7 @@ describe("OrderingContract", function () {
 
         // Voter orders the interactions
         await orderingContract.connect(sender1).orderInteraction(1, [0, 2]);
-        await orderingContract.connect(sender2).orderInteraction(1, [1, 3]); 
+        await orderingContract.connect(sender2).orderInteraction(1, [1, 3]);
         await orderingContract.connect(sender3).orderInteraction(1, [0, 1]);
 
         const domain_after_voting = await orderingContract.getDomainByIndex(1);
@@ -103,6 +102,32 @@ describe("OrderingContract", function () {
         await expect(orderingContract.connect(sender4).orderInteraction(1, [3, 2])) // Expect a conflict
             .to.emit(orderingContract, "Conflict"); // Check that Conflict event is emitted 
 
+    });
+
+
+    it("should create two domains", async function () {
+        // Accounts for senders and voter
+        const [sender1, sender2, sender3, sender4] = accounts;
+
+        // Submit four interactions by different senders
+        await Promise.all([
+            orderingContract.connect(sender1).submitInteraction(0, "PurchaseOrder"), // customer1 -> store1
+            orderingContract.connect(sender2).submitInteraction(3, "PurchaseOrder"), // customer2 -> store2
+        ]);
+
+        await mine(5); // Skip two blocks to unlock voting
+
+        const domain_count = await orderingContract.domain_count();
+
+        // Assert that the orderers count is 4
+        expect(domain_count).to.equal(2);
+
+        // Release isolated interactions
+        await orderingContract.release();
+
+        // Check if the index block is reset to 0 after voting
+        const indexBlock = await orderingContract.index_block();
+        expect(indexBlock).to.equal(0);
     });
 
 });

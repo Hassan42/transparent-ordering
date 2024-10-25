@@ -72,23 +72,6 @@ app.post('/create-network', (req, res) => {
 
         fs.writeFileSync(staticNodesPath, JSON.stringify(staticNodes, null, 2));
 
-        // Create Prometheus configuration file
-        // const prometheusConfig = `
-        // global:
-        //   scrape_interval:     15s
-        //   evaluation_interval: 15s
-
-        // scrape_configs:
-        // ${Array(NODES_NB).fill(0).map((_, i) => `
-        //     - job_name: node${i + 1}
-        //       scrape_interval: 15s
-        //       scrape_timeout: 10s
-        //       scheme: http
-        //       static_configs:
-        //         - targets: [ 'localhost:${22000 + i}' ]`).join('')}
-        // `;
-        // fs.writeFileSync(path.join(qbftNetworkPath, 'prometheus.yml'), prometheusConfig);
-
         // Create permissioned nodes and configure ports using full paths
         let dockerCompose = {
             version: '3',
@@ -192,32 +175,19 @@ app.post('/create-network', (req, res) => {
             };
         }
 
-        // dockerCompose.services['prometheus'] = {
-        //     image: 'prom/prometheus',
-        //     ports: ['9090:9090'],
-        //     volumes: [
-        //         './prometheus.yml:/etc/prometheus/prometheus.yml'
-        //     ],
-        //     networks: {
-        //         quorum_network: {
-        //             ipv4_address: '172.16.239.20'
-        //         }
-        //     }
-        // };
-
-        // dockerCompose.services['grafana'] = {
-        //     image: 'grafana/grafana',
-        //     ports: ['3000:3000'],
-        //     volumes: [
-        //         './grafana:/var/lib/grafana'
-        //     ],
-        //     depends_on: ['prometheus'],
-        //     networks: {
-        //         quorum_network: {
-        //             ipv4_address: '172.16.239.21'
-        //         }
-        //     }
-        // };
+        // Add Ethereum Lite Explorer
+        dockerCompose.services['ethereum-lite-explorer'] = {
+            image: 'alethio/ethereum-lite-explorer',
+            ports: ['80:80'],
+            environment: {
+                APP_NODE_URL: 'http://localhost:8545'
+            },
+            networks: {
+                quorum_network: {
+                    ipv4_address: '172.16.239.22'
+                }
+            }
+        };
 
         dockerCompose.networks = {
             quorum_network: {
@@ -294,6 +264,37 @@ app.post('/stop-network', (req, res) => {
         console.error(error);
         res.status(500).json({ message: 'An error occurred while stopping the network.', error: error.message });
     }
+});
+
+// Endpoint to accept participants and save to a JSON file
+app.post('/start-process-instances', (req, res) => {
+    const parentPath = path.dirname(__filename);
+    const qbftNetworkPath = path.join(parentPath, 'QBFT-Network');
+
+    const processInstances = req.body; // Array of arrays with participants
+
+    if (!Array.isArray(processInstances)) {
+        return res.status(400).json({ message: 'Invalid data format. Expected an array of arrays.' });
+    }
+
+    // Validate that each array has exactly 3 participants
+    const isValid = processInstances.every(instance => Array.isArray(instance) && instance.length === 3);
+
+    if (!isValid) {
+        return res.status(400).json({ message: 'Each process instance must contain exactly 3 participants.' });
+    }
+
+    const data = { processInstances };
+
+    const filePath = path.join(qbftNetworkPath, 'processInstances.json');
+
+    // Write the data to a JSON file
+    fs.writeFile(filePath, JSON.stringify(data, null, 2), (err) => {
+        if (err) {
+            return res.status(500).json({ message: 'Failed to save data' });
+        }
+        res.status(200).json({ message: 'Data saved successfully' });
+    });
 });
 
 // Start the server

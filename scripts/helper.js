@@ -41,12 +41,23 @@ async function getParticipants() {
             const privateKeyPath = path.join(nodeDir, 'keystore', 'accountPrivateKey');
             const privateKey = fs.existsSync(privateKeyPath) ? fs.readFileSync(privateKeyPath, 'utf8').trim() : 'unknown';
 
-            // Store role, type, public, and private keys in the object
+            // Create the wallet using ethers
+            let wallet = null;
+            if (privateKey !== 'unknown') {
+                try {
+                    wallet = new ethers.Wallet(privateKey, hre.ethers.provider); // Attach provider for interacting with the blockchain
+                } catch (walletError) {
+                    console.error(`Error creating wallet for ${node}:`, walletError);
+                }
+            }
+
+            // Store role, type, public, private keys, and wallet in the object
             participants[config.role] = {
                 node,
                 nodeType: config.nodeType,
                 publicKey,
-                privateKey
+                privateKey,
+                wallet 
             };
         } catch (error) {
             console.error(`Error reading data for ${node}:`, error);
