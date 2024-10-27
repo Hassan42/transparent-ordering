@@ -16,20 +16,17 @@ const docker = new Docker({ socketPath: '/var/run/docker.sock' });
 
 app.post('/create-network', (req, res) => {
     try {
-        const NODES_NB = req.body.nodes || 3;
-        const nodeTypes = req.body.nodeTypes || Array(NODES_NB).fill('normal'); // default to 'normal' if not provided
-        const censorTargets = req.body.censorTargets || {}; // object mapping node index to array of censor target addresses
-        const roles = req.body.roles;
+        const participants = req.body; // New structure
+        const nodeTypes = [];
+        const roles = [];
+        const participantAddresses = [];
+        const NODES_NB = Object.keys(participants).length; 
+
         const parentPath = path.dirname(__filename);
 
-        // Check if roles array is empty or undefined
-        if (!roles || roles.length === 0) {
-            return res.status(400).json({ message: 'Roles array is required and cannot be empty.' });
-        }
-
-        // Ensure the length of roles matches the number of nodes
-        if (roles.length !== NODES_NB) {
-            return res.status(400).json({ message: 'The number of roles must match the number of nodes.' });
+        // Validate incoming JSON structure
+        if (!participants || typeof participants !== 'object') {
+            return res.status(400).json({ message: 'Invalid data format. Expected an object.' });
         }
 
         console.log("Setting up network...");
@@ -42,7 +39,7 @@ app.post('/create-network', (req, res) => {
         fs.mkdirSync(qbftNetworkPath);
 
         // Generate genesis file in the new directory
-        const genesisCmd = `yes | npx quorum-genesis-tool --consensus qbft --chainID 1337 --blockperiod 10 --emptyBlockPeriod 1 --requestTimeout 10 --epochLength 30000 --difficulty 1 --gasLimit '0xFFFFFF' --coinbase '0x0000000000000000000000000000000000000000' --validators ${NODES_NB} --members 0 --bootnodes 0 --outputPath '${path.join(qbftNetworkPath, 'artifacts')}'`;
+        const genesisCmd = `yes | npx quorum-genesis-tool --consensus qbft --chainID 1337 --blockperiod 1 --emptyBlockPeriod 1 --requestTimeout 10 --epochLength 30000 --difficulty 1 --gasLimit '0xFFFFFF' --coinbase '0x0000000000000000000000000000000000000000' --validators ${NODES_NB} --members 0 --bootnodes 0 --outputPath '${path.join(qbftNetworkPath, 'artifacts')}'`;
 
         const outputDir = execSync(genesisCmd).toString().split('\n').find(line => line.includes("artifacts/")).split(' ')[3];
 
@@ -71,6 +68,31 @@ app.post('/create-network', (req, res) => {
         });
 
         fs.writeFileSync(staticNodesPath, JSON.stringify(staticNodes, null, 2));
+
+        // Process each participant and extract addresses
+        Object.entries(participants).forEach(([role, details], index) => {
+            roles.push(role);
+
+            if (details.nodeType) {
+                nodeTypes.push(details.nodeType);
+            } else {
+                return res.status(400).json({ message: `Node type for ${role} is required.` });
+            }
+
+            // Construct path to the address file for the current participant
+            const addressFilePath = path.join(artifactsPath, `validator${index}`, 'accountAddress');
+
+            // Check if the address file exists and is a file
+            if (fs.existsSync(addressFilePath) && fs.statSync(addressFilePath).isFile()) {
+                const address = fs.readFileSync(addressFilePath, 'utf8').trim();
+                participantAddresses.push(address);
+            } else {
+                // If the address file is not found, return an error response
+                return res.status(400).json({ message: `Address file not found for participant ${role}.` });
+            }
+        });
+
+        
 
         // Create permissioned nodes and configure ports using full paths
         let dockerCompose = {
@@ -105,17 +127,28 @@ app.post('/create-network', (req, res) => {
                 fs.copyFileSync(path.join(validatorDir, file), path.join(keystorePath, file));
             });
 
-            // const port = 30300 + i;
-            // const ws = 32000 + i;
             const http = 8545 + i;
 
             // Generate start-node.sh
-            const nodeType = nodeTypes[i];
-            const censorTargetAddresses = nodeType === 'censor' ? censorTargets[i] || [] : [];
 
+            const currentRole = roles[i];
+            const currentDetails = participants[currentRole];
+
+            const nodeType = nodeTypes[i];
             let nodeTypeFlag = '';
+            let censorTargetsArray = '';
+
             if (nodeType === 'censor') {
-                nodeTypeFlag = `--nodetype censor --censored "[${censorTargetAddresses.join(',')}]"`;
+                // Get the targets from the details
+                const targets = currentDetails.censorTargets || [];
+
+                // Map the targets to their corresponding addresses
+                censorTargetsArray = JSON.stringify(targets.map(target => {
+                    const targetIndex = roles.indexOf(target);
+                    return targetIndex !== -1 ? participantAddresses[targetIndex] : null;
+                }).filter(address => address !== null)); // Filter out any nulls
+
+                nodeTypeFlag = `--nodetype censor --censored '${censorTargetsArray}'`;
             } else if (nodeType === 'displace') {
                 nodeTypeFlag = '--nodetype displace';
             }
@@ -203,15 +236,14 @@ app.post('/create-network', (req, res) => {
         const composeFilePath = path.join(qbftNetworkPath, 'docker-compose.yml');
         fs.writeFileSync(composeFilePath, yaml.dump(dockerCompose));
 
-        // const permissionedNodesPath = path.join(goQuorumDir, 'permissioned-nodes.json');
-        // fs.copyFileSync(staticNodesPath, permissionedNodesPath);
-
         res.json({ message: `Network with ${NODES_NB} nodes created successfully.` });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'An error occurred while setting up the network.', error: error.message });
     }
 });
+
+
 
 app.post('/start-network', (req, res) => {
     try {

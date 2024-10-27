@@ -2,201 +2,158 @@
 pragma solidity ^0.8.0;
 
 contract ProcessContract {
-    enum State {
-        Closed,
-        Open,
-        Completed
-    }
+    // Enums for defining possible states and roles
+    enum State { Closed, Open, Completed }
+    enum Role { Customer, Retailer, Manufacturer }
 
+    // Events
+    event InstanceCreated(uint instanceID);
+
+    // Modifiers
     modifier isAccessible(uint instanceID, string memory _activity) {
         require(
-            intances[instanceID].state[_activity] == State.Open,
+            instances[instanceID].state[_activity] == State.Open,
             "Activity is not open"
         );
         require(
-            intances[instanceID].taskParticipants[_activity].sender ==
+            instances[instanceID].taskParticipants[_activity].sender ==
                 msg.sender,
             "Caller does not have the required role"
         );
         _;
     }
 
-    struct LocalData {
-        uint supplies; // Number of supplies
-    }
-
+    // Structs
     struct GlobalData {
-        uint256 basePrice; // Base price in wei
-        uint256 demandFactor; // Price increase factor (in percentage, e.g., 10 for 10%)
-        uint256 requestCount; // Number of requests made
+        mapping(address => uint) supplies; // Supplies per retailer
+        uint256 basePrice;      // Base price in wei
+        uint256 demandFactor;   // Price increase factor (percentage, e.g., 10 for 10%)
+        uint256 requestCount;   // Number of requests made
     }
-
-    struct Instance {
-        LocalData localData;
-        mapping(string => State) state;
-        mapping(string => TaskParticipants) taskParticipants;
-    }
-
+    
     struct TaskParticipants {
         address sender;
         address receiver;
     }
 
-    mapping(uint => Instance) public intances;
-
-    uint public instancesCount;
-
-    GlobalData public globalData;
-
-    constructor() {}
-
-    function setState(
-        uint instanceID,
-        string memory _activity,
-        uint8 _state
-    ) public {
-        require(_state <= 3, "Not Valid State");
-        intances[instanceID].state[_activity] = State(_state);
+    struct Instance {
+        mapping(string => State) state;
+        mapping(Role => address) participants;
+        mapping(string => TaskParticipants) taskParticipants;
     }
 
-    function setParticipants(
-        uint instanceID,
-        address[] memory participants
-    ) public {
+    // State Variables
+    uint public instancesCount;
+    GlobalData public globalData;
+    mapping(uint => Instance) private instances;
+
+    // Constructor
+    constructor() {}
+
+    // Instance Management
+    function newInstance(address[] memory participants) public {
+        require(participants.length == 3, "Exactly three participants required");
+
+        uint instanceID = instancesCount++;
         address customer = participants[0];
         address retailer = participants[1];
         address manufacturer = participants[2];
 
-        intances[instanceID].taskParticipants[
-            "PurchaseOrder"
-        ] = TaskParticipants(customer, retailer);
+        require(customer != address(0) && retailer != address(0) && manufacturer != address(0), "Invalid participant address");
 
-        intances[instanceID].taskParticipants[
-            "ConfirmOrder"
-        ] = TaskParticipants(retailer, customer);
+        instances[instanceID].participants[Role.Customer] = customer;
+        instances[instanceID].participants[Role.Retailer] = retailer;
+        instances[instanceID].participants[Role.Manufacturer] = manufacturer;
 
-        intances[instanceID].taskParticipants[
-            "RestockRequest"
-        ] = TaskParticipants(retailer, manufacturer);
+        instances[instanceID].taskParticipants["PurchaseOrder"] = TaskParticipants(customer, retailer);
+        instances[instanceID].taskParticipants["ConfirmOrder"] = TaskParticipants(retailer, customer);
+        instances[instanceID].taskParticipants["RestockRequest"] = TaskParticipants(retailer, manufacturer);
+        instances[instanceID].taskParticipants["ConfirmRestock"] = TaskParticipants(manufacturer, retailer);
+        instances[instanceID].taskParticipants["CancelOrder"] = TaskParticipants(customer, retailer);
 
-        intances[instanceID].taskParticipants[
-            "ConfirmRestock"
-        ] = TaskParticipants(manufacturer, retailer);
+        instances[instanceID].state["PurchaseOrder"] = State.Open;
 
-        intances[instanceID].taskParticipants[
-            "CancelOrder"
-        ] = TaskParticipants(customer, retailer);
+        emit InstanceCreated(instanceID);
     }
 
-    function setParticipantsByTask(
-        uint instanceID,
-        string memory taskName,
-        address sender,
-        address receiver
-    ) public {
-        intances[instanceID].taskParticipants[taskName] = TaskParticipants(
-            sender,
-            receiver
-        );
+    function setParticipantsByTask(uint instanceID, string memory taskName, address sender, address receiver) public {
+        instances[instanceID].taskParticipants[taskName] = TaskParticipants(sender, receiver);
     }
 
-    function getState(
-        uint instanceID,
-        string memory _activity
-    ) public view returns (State) {
-        return intances[instanceID].state[_activity];
+    function setState(uint instanceID, string memory _activity, uint8 _state) public {
+        require(_state <= 2, "Invalid state");
+        instances[instanceID].state[_activity] = State(_state);
     }
 
-    function getParticipantsByTask(
-        uint instanceID,
-        string memory taskName
-    ) public view returns (address sender, address receiver) {
-        TaskParticipants memory participants = intances[instanceID]
-            .taskParticipants[taskName];
-        return (participants.sender, participants.receiver);
-    }
+    // Task Management Functions
+    function PurchaseOrder(uint instanceID) public isAccessible(instanceID, "PurchaseOrder") {
+        address retailer = instances[instanceID].participants[Role.Retailer];
 
-    //Reset data each new epoch
-    function resetData() public {
-        for (uint i = 0; i < instancesCount; i++) {
-            intances[i].localData.supplies = 1;
-        }
-        globalData.requestCount = 0;
-    }
-
-    function compareStrings(
-        string memory a,
-        string memory b
-    ) internal pure returns (bool) {
-        return keccak256(abi.encodePacked(a)) == keccak256(abi.encodePacked(b));
-    }
-
-    function calculatePrice() internal view returns (uint256) {
-        uint256 priceIncrease;
-
-        // Check if there are multiple requests
-        if (globalData.requestCount > 1) {
-            // Calculate the price increase based on the number of requests
-            priceIncrease =
-                (globalData.basePrice *
-                    globalData.demandFactor *
-                    globalData.requestCount) /
-                100;
+        if (globalData.supplies[retailer] > 0) {
+            instances[instanceID].state["ConfirmOrder"] = State.Open;
         } else {
-            priceIncrease = 0; // No increase if only one request
+            instances[instanceID].state["RestockRequest"] = State.Open;
         }
 
-        // Calculate the final price
-        return globalData.basePrice + priceIncrease;
+        instances[instanceID].state["PurchaseOrder"] = State.Completed;
     }
 
-    function PurchaseOrder(
-        uint instanceID
-    ) public isAccessible(instanceID, "PurchaseOrder") {
-        if (intances[instanceID].localData.supplies > 0) {
-            intances[instanceID].state["ConfirmOrder"] = State.Open;
-        } else {
-            intances[instanceID].state["RestockRequest"] = State.Open;
-        }
-
-        intances[instanceID].state["PurchaseOrder"] = State.Completed;
+    function ConfirmOrder(uint instanceID) public isAccessible(instanceID, "ConfirmOrder") {
+        instances[instanceID].state["ConfirmOrder"] = State.Completed;
     }
 
-    function ConfirmOrder(
-        uint instanceID
-    ) public isAccessible(instanceID, "ConfirmOrder") {
-        intances[instanceID].state["ConfirmOrder"] = State.Completed;
-    }
-
-    function RestockRequest(
-        uint instanceID
-    ) public isAccessible(instanceID, "RestockRequest") returns (uint256) {
+    function RestockRequest(uint instanceID) public isAccessible(instanceID, "RestockRequest") returns (uint256) {
         globalData.requestCount++;
-
         uint256 newPrice = calculatePrice();
 
-        intances[instanceID].state["ConfirmRestock"] = State.Open;
-
-        intances[instanceID].state["CancelOrder"] = State.Open;
-
-        intances[instanceID].state["RestockRequest"] = State.Completed;
+        instances[instanceID].state["ConfirmRestock"] = State.Open;
+        instances[instanceID].state["CancelOrder"] = State.Open;
+        instances[instanceID].state["RestockRequest"] = State.Completed;
 
         return newPrice;
     }
 
-    function ConfirmRestock(
-        uint instanceID
-    ) public isAccessible(instanceID, "ConfirmRestock") {
-        intances[instanceID].localData.supplies = 1;
+    function ConfirmRestock(uint instanceID) public isAccessible(instanceID, "ConfirmRestock") {
+        address retailer = instances[instanceID].participants[Role.Retailer];
+        globalData.supplies[retailer] = 1;
 
-        intances[instanceID].state["ConfirmOrder"] = State.Open;
-
-        intances[instanceID].state["ConfirmRestock"] = State.Completed;
+        instances[instanceID].state["ConfirmOrder"] = State.Open;
+        instances[instanceID].state["ConfirmRestock"] = State.Completed;
     }
 
-    function CancelOrder(
-        uint instanceID
-    ) public isAccessible(instanceID, "CancelOrder") {
-        intances[instanceID].state["CancelOrder"] = State.Completed;
+    function CancelOrder(uint instanceID) public isAccessible(instanceID, "CancelOrder") {
+        instances[instanceID].state["CancelOrder"] = State.Completed;
+    }
+
+    // Global Data Reset
+    function resetData() public {
+        for (uint i = 0; i < instancesCount; i++) {
+            address retailer = instances[i].participants[Role.Retailer];
+            globalData.supplies[retailer] = 1;
+        }
+        globalData.requestCount = 0;
+    }
+
+    // Helper Functions
+    function compareStrings(string memory a, string memory b) internal pure returns (bool) {
+        return keccak256(abi.encodePacked(a)) == keccak256(abi.encodePacked(b));
+    }
+
+    function calculatePrice() internal view returns (uint256) {
+        uint256 priceIncrease = globalData.requestCount > 1
+            ? (globalData.basePrice * globalData.demandFactor * globalData.requestCount) / 100
+            : 0;
+
+        return globalData.basePrice + priceIncrease;
+    }
+
+    // Getter Functions
+    function getState(uint instanceID, string memory _activity) public view returns (State) {
+        return instances[instanceID].state[_activity];
+    }
+
+    function getParticipantsByTask(uint instanceID, string memory taskName) public view returns (address sender, address receiver) {
+        TaskParticipants memory participants = instances[instanceID].taskParticipants[taskName];
+        return (participants.sender, participants.receiver);
     }
 }
