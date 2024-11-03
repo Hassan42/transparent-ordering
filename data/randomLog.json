@@ -1,0 +1,32 @@
+[
+  [
+    {
+      "instanceID": 2,
+      "deferredChoice": [
+        1,
+        0
+      ]
+    },
+    {
+      "instanceID": 1,
+      "deferredChoice": [
+        1,
+        0
+      ]
+    },
+    {
+      "instanceID": 3,
+      "deferredChoice": [
+        0,
+        1
+      ]
+    },
+    {
+      "instanceID": 4,
+      "deferredChoice": [
+        1,
+        0
+      ]
+    }
+  ]
+]
