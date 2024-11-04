@@ -7,11 +7,15 @@ const cliProgress = require('cli-progress');
 
 const dataDir = path.join(__dirname, '..', 'data'); // Define your data directory
 
+// Contracts definition
 let processContract;
 let orderingContract;
 
+// Instances with participants data
 let instancesDetails;
 
+
+// Tasks Information
 const taskSenderMap = {
     "PurchaseOrder": "customer",
     "ConfirmOrder": "retailer",
@@ -19,7 +23,6 @@ const taskSenderMap = {
     "ConfirmRestock": "manufacturer",
     "CancelOrder": "customer"
 };
-
 const taskReceiverMap = {
     "PurchaseOrder": "retailer",
     "ConfirmOrder": "customer",
@@ -28,12 +31,17 @@ const taskReceiverMap = {
     "CancelOrder": "retailer"
 };
 
+// Nonce data for every participant
 const nonceMap = new Map();
+
+// Event log
 const logs = [];
 
 async function main() {
+    const epochs = 500;
+    const randomLogArg = process.env.RANDOM_LOG_PATH; // Get randomLog from command-line arguments if provided
 
-    const epochs = 1;
+    let randomLog;
     // Retrieve participants and validate against process instances
     const participants = await getParticipantsAndValidate();
     if (!participants) return;
@@ -50,8 +58,20 @@ async function main() {
     instancesDetails = await createProcessInstances(participants);
 
     // Generate a random log with the desired number of entries
-    const randomLog = generateRandomLog(instancesDetails.length, epochs); // Generate 500 entries
-    writeJsonToFile(dataDir, 'randomLog', randomLog); // Write randomLog to data directory
+    // If randomLog argument is provided, parse it; otherwise, generate it
+    if (randomLogArg) {
+        try {
+            randomLog = JSON.parse(fs.readFileSync(randomLogArg, 'utf8'));
+        } catch (error) {
+            console.error("Failed to load provided randomLog. Please ensure it's a valid JSON file.");
+            return;
+        }
+    } else {
+        console.log("Generating new log...");
+        randomLog = generateRandomLog(instancesDetails.length, epochs); // Generate randomLog if not provided
+        writeJsonToFile(dataDir, 'randomLog', randomLog); // Write randomLog to data directory
+    }
+    
 
     console.log("Starting process instances...");
     const progressBar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
@@ -81,6 +101,7 @@ async function main() {
     console.log('All instances have been executed successfully.');
     // Write updated logs back to the file
     writeJsonToFile(dataDir, "logs", logs);
+    saveDiscoLog(dataDir, "discoLog");
     process.exit(0); // Terminate the process when progress bar completes
 
 }
@@ -172,7 +193,6 @@ async function executeTask(instanceID, taskName, participant) {
                 await delay(500);
             } else {
                 // Task not open: revert
-                // console.warn(instanceID, taskName, participant.role, error.message);
                 return;
             }
         }
@@ -223,7 +243,7 @@ async function getParticipantsAndValidate() {
     const allRolesMatch = processInstances.every(instance =>
         instance.every(role => {
             if (participants[role]) return true;
-            console.log(`Role ${role} not found`);
+            console.warn(`Role ${role} not found`);
             return false;
         })
     );
@@ -358,30 +378,32 @@ function shuffleArray(array) {
 
 async function listenForEvents() {
     // Listen for InstanceCreated event
-    processContract.on("InstanceCreated", async (instanceID) => {
+    processContract.on("InstanceCreated", async (instanceID, event) => {
+        const transactionHash = event.log.transactionHash;
         const eventData = { instanceID: instanceID.toString() };
-        await logEvent("InstanceCreated", eventData);
+        await logEvent("InstanceCreated", eventData, transactionHash);
     });
 
     // Listen for NewPrice event
-    processContract.on("NewPrice", async (instanceID, newPrice, requestCount) => {
+    processContract.on("NewPrice", async (instanceID, newPrice, requestCount, event) => {
+        const transactionHash = event.log.transactionHash
         const eventData = {
             instanceID: instanceID.toString(),
             newPrice: newPrice.toString(),
             requestCount: requestCount.toString()
         };
-        await logEvent("NewPrice", eventData);
+        await logEvent("NewPrice", eventData, transactionHash);
     });
 
     // Listen for TaskCompleted event
-    processContract.on("TaskCompleted", async (instanceID, taskName) => {
-
+    processContract.on("TaskCompleted", async (instanceID, taskName, event) => {
         // Retrieve participant role based on taskName
         const senderRole = taskSenderMap[taskName];
         const receiverRole = taskReceiverMap[taskName];
         const instance = instancesDetails.find(inst => inst.instanceID === Number(instanceID));
         const sender = instance.participants.find(p => p.role.startsWith(senderRole));
         const receiver = instance.participants.find(p => p.role.startsWith(receiverRole));
+        const transactionHash = event.log.transactionHash;
 
         const eventData = {
             instanceID: instanceID.toString(),
@@ -389,21 +411,95 @@ async function listenForEvents() {
             sender: sender.role,
             receiver: receiver.role
         };
-        await logEvent("TaskCompleted", eventData);
+        await logEvent("TaskCompleted", eventData, transactionHash);
     });
 
     // Keep the script running to listen for events
     console.log("Listening for events...");
 }
 
-async function logEvent(eventName, eventData) {
+async function logEvent(eventName, eventData, transactionHash) {
+    const receipt = await ethers.provider.getTransactionReceipt(transactionHash);
 
     // Add new log entry
     logs.push({
         event: eventName,
         data: eventData,
+        gasUsed: receipt.gasUsed.toString(),
+        blockNumber: receipt.blockNumber.toString(),
         timestamp: new Date().toISOString(),
     });
+}
+
+function saveDiscoLog(dir, fileName) {
+    // Initialize an object to hold prices by instanceID
+    const pricesByInstanceID = {};
+
+    logs.forEach(log => {
+        const { event, data } = log;
+        
+        // If the event is "NewPrice", store the price by instanceID
+        if (event === "NewPrice") {
+            pricesByInstanceID[data.instanceID] = data.newPrice; 
+        }
+    });
+
+    const discoLogs = logs.map(log => {
+        const { event, data, gasUsed, blockNumber, timestamp } = log;
+
+        // If the event is "NewPrice", store the price by instanceID
+        if (event === "NewPrice") {
+            return; // Skip
+        }
+
+        // If the event is "TaskCompleted", replace event value with taskName
+        const newEvent = event === "TaskCompleted" ? data.taskName : event;
+
+        // Prepare the transformed entry
+        const transformedEntry = {
+            event: newEvent,
+            gasUsed,
+            blockNumber,
+            timestamp,
+            instanceID: data.instanceID, // Include instanceID directly
+            sender: event === "TaskCompleted" ? (data.sender || null) : null, // Set sender to null if not present
+            receiver: event === "TaskCompleted" ? (data.receiver || null) : null, // Set receiver to null if not present
+            price: null // Initialize price as null
+        };
+
+        // If the event is "RestockRequest", add the corresponding price
+        if (event === "TaskCompleted" && data.taskName == "RestockRequest") {
+            transformedEntry.price = pricesByInstanceID[data.instanceID] || null; // Add the price for the specific instanceID
+        }
+
+        return transformedEntry;
+    }).filter(entry => entry !== undefined);
+
+    // Function to convert JSON to CSV format
+    const jsonToCsv = (json) => {
+        if (json.length === 0) return ''; // Handle empty input
+
+        const headers = Object.keys(json[0]);
+        const csvRows = [
+            headers.join(','), // Join headers
+            ...json.map(row =>
+                headers.map(header => JSON.stringify(row[header] || '')).join(',') // Join each row
+            ) // Correctly close the parentheses
+        ];
+        return csvRows.join('\n'); // Join all rows with a new line
+    };
+
+    // Convert discoLogs to CSV
+    const csvData = jsonToCsv(discoLogs);
+
+    // Write CSV to file
+    const filePath = path.join(dir, `${fileName}.csv`);
+    try {
+        fs.writeFileSync(filePath, csvData);
+        console.log(`Disco CSV file has been written successfully to ${filePath}!`);
+    } catch (err) {
+        console.error('Error writing to CSV file', err);
+    }
 }
 
 function writeJsonToFile(dir, filename, data) {
