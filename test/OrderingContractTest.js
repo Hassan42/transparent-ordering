@@ -43,7 +43,6 @@ describe("OrderingContract", function () {
         // Check if the index block is reset to 0 after voting
         const indexBlock = await orderingContract.index_block();
         expect(indexBlock).to.equal(0);
-
     });
 
     it("should order isolated interactions correctly", async function () {

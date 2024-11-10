@@ -4,8 +4,11 @@ const { getParticipants } = require('./helper');
 const fs = require('fs');
 const path = require('path');
 const cliProgress = require('cli-progress');
+const EventEmitter = require("events");
 
 const dataDir = path.join(__dirname, '..', 'data'); // Define your data directory
+
+const eventEmitter = new EventEmitter();
 
 // Contracts definition
 let processContract;
@@ -13,6 +16,7 @@ let orderingContract;
 
 // Instances with participants data
 let instancesDetails;
+
 
 
 // Tasks Information
@@ -37,73 +41,92 @@ const nonceMap = new Map();
 // Event log
 const logs = [];
 
+// Delays between ech round
+const ROUND_DELAY = 1000;
+
+let global_execution_count = 0;
+
+// Rounds 
+const rounds = 2;
+
 async function main() {
-    const epochs = 500;
+
     const randomLogArg = process.env.RANDOM_LOG_PATH; // Get randomLog from command-line arguments if provided
 
-    let randomLog;
     // Retrieve participants and validate against process instances
     const participants = await getParticipantsAndValidate();
     if (!participants) return;
 
-    console.log("Deploying contracts...");
+    console.log(participants)
 
-    // Deploy contracts
     await deployContracts();
 
-    // Listen to emitted events
+    checkAndEmitCanVoteEvent();
+
     listenForEvents();
 
     // Create process instances and log instance details
     instancesDetails = await createProcessInstances(participants);
 
-    // Generate a random log with the desired number of entries
-    // If randomLog argument is provided, parse it; otherwise, generate it
+    const randomLog = await setupRandomLog(randomLogArg, instancesDetails.length);
+
+    await executeProcessInstances(randomLog);
+
+    saveResults();
+
+    process.exit(0); // Terminate the process when progress bar completes
+
+}
+
+// Generate a random log with the desired number of entries
+// If randomLog argument is provided, parse it; otherwise, generate it
+async function setupRandomLog(randomLogArg, instanceCount) {
+    let randomLog;
     if (randomLogArg) {
         try {
             randomLog = JSON.parse(fs.readFileSync(randomLogArg, 'utf8'));
         } catch (error) {
             console.error("Failed to load provided randomLog. Please ensure it's a valid JSON file.");
-            return;
+            process.exit(1);
         }
     } else {
         console.log("Generating new log...");
-        randomLog = generateRandomLog(instancesDetails.length, epochs); // Generate randomLog if not provided
-        writeJsonToFile(dataDir, 'randomLog', randomLog); // Write randomLog to data directory
+        randomLog = generateRandomLog(instanceCount, rounds);
+        writeJsonToFile(dataDir, 'randomLog', randomLog);
     }
-    
+    return randomLog;
+}
 
+async function executeProcessInstances(randomLog) {
     console.log("Starting process instances...");
     const progressBar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
-    progressBar.start(randomLog.length, 0); // Start with total length of randomLog
+    progressBar.start(randomLog.length, 0);
 
     for (let i = 0; i < randomLog.length; i++) {
-        const instanceOrder = randomLog[i];
+        const { instances: instanceOrder, delay } = randomLog[i];
 
-        // Map each instanceID in the current order
-        const executionPromises = instanceOrder.map(async ({ instanceID, deferredChoice }) => {
+        await Promise.all(instanceOrder.map(async ({ instanceID, deferredChoice }) => {
             const instance = instancesDetails.find(inst => inst.instanceID === instanceID);
             if (!instance) {
                 console.error(`Instance ${instanceID} not found.`);
                 return;
             }
-            return executeInstance(instance, deferredChoice); // Pass deferredChoice to executeInstance
-        });
+            return executeInstance(instance, deferredChoice);
+        }));
 
-        // Wait for all `executeInstance` calls in the current `instanceOrder` to complete
-        await Promise.all(executionPromises);
-        // Reset state of every instance
         await resetState();
         progressBar.update(i + 1);
+
+        if (delay) await makeDelay(ROUND_DELAY);
     }
 
-    progressBar.stop(); // Stop the progress bar when the loop completes
-    console.log('All instances have been executed successfully.');
-    // Write updated logs back to the file
+    progressBar.stop();
+    console.log("All instances have been executed successfully.");
+}
+
+function saveResults() {
     writeJsonToFile(dataDir, "logs", logs);
     saveDiscoLog(dataDir, "discoLog");
-    process.exit(0); // Terminate the process when progress bar completes
-
 }
 
 async function executeInstance(instance, deferredChoice) {
@@ -132,23 +155,23 @@ async function executeInstance(instance, deferredChoice) {
             const task = openTasks[0];
             const participantRole = taskSenderMap[task];
             const participant = participants[participantRole];
-            await executeTask(instance.instanceID, task, participant);
+            await executeTaskOC(instance.instanceID, task, participant);
         } else {
             // Use deferredChoice to decide between ConfirmRestock or CancelOrder
+            const choices = [];
             for (const choice of deferredChoice) {
                 const task = choice === 1 ? "ConfirmRestock" : "CancelOrder";
                 const participantRole = taskSenderMap[task];
                 const participant = participants[participantRole];
-                await executeTask(instance.instanceID, task, participant);
+                choices.push(executeTaskOC(instance.instanceID, task, participant));
             }
+            // Wait for both choices to be resolved;
+            await Promise.all(choices);
         }
 
         // Update the open tasks list after executing tasks
         openTasks = await fetchProcessState(instance.instanceID);
     }
-
-    //Reset State of the instance (not a task, seperate from process to avoid fees)
-    // await executeTask(instance.instanceID, "resetInstanceState", participants.customer);
 }
 
 async function executeTask(instanceID, taskName, participant) {
@@ -190,9 +213,67 @@ async function executeTask(instanceID, taskName, participant) {
                 // console.warn(`Nonce too low for participant ${participant.role}, retrying with updated nonce.`);
                 // Clear nonce cache for this participant to force a fresh fetch in the next attempt
                 nonceMap.delete(participant.publicKey);
-                await delay(500);
+                // await makeDelay(500);
             } else {
                 // Task not open: revert
+                return;
+            }
+        }
+    }
+}
+
+async function executeTaskOC(instanceID, taskName, participant) {
+    const participantSigner = participant.wallet.connect(ethers.provider);
+    const contractWithParticipant = orderingContract.connect(participantSigner);
+    const contractFunction = contractWithParticipant["submitInteraction"];
+    let txResponse;
+
+    while (true) {
+        try {
+            // Retrieve and update nonce for the participant
+            let currentNonce;
+            if (nonceMap.has(participant.publicKey)) {
+                // Use the next nonce in sequence if participant has a stored nonce
+                currentNonce = nonceMap.get(participant.publicKey) + 1;
+            } else {
+                // Get the latest nonce from the network if no nonce is stored
+                currentNonce = await ethers.provider.getTransactionCount(participant.publicKey, 'latest');
+            }
+            nonceMap.set(participant.publicKey, currentNonce);
+
+            // Send the transaction with the assigned nonce
+            txResponse = await contractFunction(instanceID, taskName, {
+                gasLimit: 10000000,
+                nonce: currentNonce,
+            });
+
+            // Wait for the transaction to complete and return the receipt
+            const receipt = await txResponse.wait();
+
+            // Update nonce map to next expected nonce after successful transaction
+            nonceMap.set(participant.publicKey, currentNonce);
+            console.log(instanceID, "end epoch")
+            // Wait for the InteractionPoolOpen event before returning
+            await new Promise((resolve) => {
+                orderingContract.once("InteractionPoolOpen", () => {
+                    console.log(instanceID, "next epoch")
+                    resolve();
+                });
+            });
+
+            return receipt;
+
+        } catch (error) {
+            if (error.code === 'NONCE_EXPIRED' ||
+                error.message.includes('nonce too low') ||
+                error.message.includes('replacement transaction underpriced')) {
+                // console.warn(`Nonce too low for participant ${participant.role}, retrying with updated nonce.`);
+                // Clear nonce cache for this participant to force a fresh fetch in the next attempt
+                nonceMap.delete(participant.publicKey);
+                // await makeDelay(500);
+            } else {
+                // Task not open: revert
+                console.log("test")
                 return;
             }
         }
@@ -212,8 +293,26 @@ async function resetState() {
     }
 }
 
+// Function to continuously check `canVote` and emit event when true
+async function checkAndEmitCanVoteEvent() {
+    while (true) {
+        try {
+            const canVote = await orderingContract.canVote();
+
+            if (canVote) {
+                // Emit the "canVoteEvent" with some data
+                eventEmitter.emit("canVoteEvent", { message: "canVote is true!" });
+                break; // Stop the loop after emitting the event
+            }
+        } catch (error) {
+            console.error("Error checking canVote:", error);
+            break; // Stop the loop on error to avoid infinite retries
+        }
+    }
+}
+
 // Helper function to introduce a delay
-function delay(ms) {
+async function makeDelay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
@@ -263,13 +362,24 @@ function getProcessInstancesPath() {
 
 // Deploy ProcessContract and OrderingContract
 async function deployContracts() {
-    const ProcessContract = await ethers.getContractFactory("ProcessContract");
-    processContract = await ProcessContract.deploy();
-    // console.log(`ProcessContract deployed at: ${processContract.target}`);
+    console.log("Deploying contracts...");
+    try {
+        const ProcessContract = await ethers.getContractFactory("ProcessContract");
+        processContract = await ProcessContract.deploy();
+        console.log(`ProcessContract deployed at: ${processContract.target}`);
 
-    const OrderingContract = await ethers.getContractFactory("OrderingContract");
-    orderingContract = await OrderingContract.deploy(processContract.target);
-    // console.log(`OrderingContract deployed at: ${orderingContract.target}`);
+        const OrderingContract = await ethers.getContractFactory("OrderingContract");
+        orderingContract = await OrderingContract.deploy(processContract.target);
+        console.log(`OrderingContract deployed at: ${orderingContract.target}`);
+
+        await makeDelay(5000); // ethers will crash if we dont wait some time for the contract to be confirmed (unable to call view functions) (??)
+
+        await processContract.setOrderingContractAddress(orderingContract.target);
+
+    } catch (error) {
+        console.error("Error deploying contracts:", error);
+    }
+
 }
 
 // Create process instances on the blockchain and return details
@@ -333,13 +443,12 @@ async function createProcessInstances(participants) {
     return instanceDetails;
 }
 
-// Generate a random log of instance sequences
 /**
  * Generates a random log of instance sequences for the specified number of entries.
  *
  * @param {number} instanceCount - The total number of instances available.
  * @param {number} entries - The number of log entries to generate.
- * @returns {Array<Array<number>>} - An array of entries, where each entry is an array containing instance IDs in random order.
+ * @returns {Array<Object>} - An array of log entries, where each entry is an object containing an array of instances and a delay flag.
  */
 function generateRandomLog(instanceCount, entries) {
     const log = [];
@@ -349,13 +458,17 @@ function generateRandomLog(instanceCount, entries) {
         // Shuffle the instances array to create a random order
         const shuffledInstances = shuffleArray(instances.slice()); // Create a shuffled copy of the instances array
 
-        // Combine instanceID with the fixed deferredChoice
-        const entry = shuffledInstances.map(instanceID => ({
+        // Map the shuffled instances to objects with instanceID and deferredChoice
+        const instanceSequence = shuffledInstances.map(instanceID => ({
             instanceID,
             deferredChoice: Math.random() < 0.5 ? [0, 1] : [1, 0] // Randomly assign one of the two valid pairs
         }));
 
-        log.push(entry);
+        // Add the entry with the instance sequence and a random delay
+        log.push({
+            instances: instanceSequence,
+            delay: Math.random() < 0.5 // Randomly assign true or false for delay
+        });
     }
 
     return log;
@@ -369,11 +482,13 @@ function generateRandomLog(instanceCount, entries) {
  * @returns {Array} - The shuffled array.
  */
 function shuffleArray(array) {
-    for (let i = array.length - 1; i > 0; i--) {
+    // Create a shallow copy of the array to avoid modifying the original
+    const newArray = [...array];
+    for (let i = newArray.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
-        [array[i], array[j]] = [array[j], array[i]]; // Swap elements
+        [newArray[i], newArray[j]] = [newArray[j], newArray[i]]; // Swap elements
     }
-    return array;
+    return newArray;
 }
 
 async function listenForEvents() {
@@ -405,17 +520,75 @@ async function listenForEvents() {
         const receiver = instance.participants.find(p => p.role.startsWith(receiverRole));
         const transactionHash = event.log.transactionHash;
 
+        //Increase execution count
+        if (taskName == "PurchaseOrder") {
+            instance.execution_count = 1 + global_execution_count++;
+        }
+
         const eventData = {
             instanceID: instanceID.toString(),
             taskName: taskName,
             sender: sender.role,
-            receiver: receiver.role
+            receiver: receiver.role,
+            executionCount: instance.execution_count,
         };
         await logEvent("TaskCompleted", eventData, transactionHash);
     });
 
+    // Local event to know when to vote
+    eventEmitter.on("canVoteEvent", async (data) => {
+        console.log("canVoteEvent triggered:", data.message);
+        await orderingVotes();
+    });
+
     // Keep the script running to listen for events
     console.log("Listening for events...");
+}
+
+async function orderingVotes() {
+
+    // Get the total domain count
+    const domainCount = await orderingContract.domain_count();
+
+    // Fetch all pending interactions
+    const pendingInteractions = await orderingContract.getPendingInteractions();
+
+    // Array to hold the domains
+    const domains = [];
+
+    // Loop through each domain to get their details
+    for (let i = 1; i <= domainCount; i++) {
+        const domain = await orderingContract.getDomainByIndex(i);
+        const filteredInteractionsByDomain = pendingInteractions.filter(interaction => interaction.domain === i);
+
+        // Add filtered interactions to the domain object
+        const domainWithInteractions = {
+            ...domain,
+            pendingInteractions: filteredInteractionsByDomain,
+        };
+
+        // Push the updated domain to the domains array
+        domains.push(domainWithInteractions);
+
+        // Populate the orderers array for the current domain
+        for (let j = 0; j < domain.orderers.length; j++) {
+            const ordererAddress = domain.orderers[j];
+
+            // Fetch the pending interactions for the current orderer
+            const pendingInteractionsForOrderer = await orderingContract.getPendingInteractionsForOrderer(domain.id, ordererAddress);
+            
+            const indicesToReorder = shuffleArray(pendingInteractionsForOrderer); // TODO: different strategy to order
+
+            console.log(ordererAddress, pendingInteractionsForOrderer)
+
+            // await orderingContract.orderInteraction(domain.domainId, indicesToReorder);
+
+        }
+    }  
+
+    console.log(domains)
+    // Check for the next ordering phase
+    // checkAndEmitCanVoteEvent();
 }
 
 async function logEvent(eventName, eventData, transactionHash) {
@@ -437,10 +610,10 @@ function saveDiscoLog(dir, fileName) {
 
     logs.forEach(log => {
         const { event, data } = log;
-        
+
         // If the event is "NewPrice", store the price by instanceID
         if (event === "NewPrice") {
-            pricesByInstanceID[data.instanceID] = data.newPrice; 
+            pricesByInstanceID[data.instanceID] = data.newPrice;
         }
     });
 
@@ -464,6 +637,7 @@ function saveDiscoLog(dir, fileName) {
             instanceID: data.instanceID, // Include instanceID directly
             sender: event === "TaskCompleted" ? (data.sender || null) : null, // Set sender to null if not present
             receiver: event === "TaskCompleted" ? (data.receiver || null) : null, // Set receiver to null if not present
+            executionCount: event === "TaskCompleted" ? (data.executionCount || null) : null,
             price: null // Initialize price as null
         };
 

@@ -5,11 +5,10 @@ import "./IProcessContract.sol";
 
 contract OrderingContract {
     IProcessContract public process;
-    address public workflow_address;
 
     uint public block_interval = 5;
     uint public index_block = 0;
-    uint public domain_count = 0;
+    uint public domain_count = 0; // domain 0 is reserved
 
     struct Interaction {
         uint instance;
@@ -28,10 +27,11 @@ contract OrderingContract {
     struct Domain {
         uint id;
         DomainStatus status;
-        mapping(address => Orderer) orderers;
+        mapping(uint => Orderer) orderers;
         uint vote_count;
         uint[] ordered_interactions;
         uint orderers_count;
+        mapping(address => uint[]) ordererToPendingInteractions; // TODO: move it to orderer
     }
 
     enum DomainStatus {
@@ -42,10 +42,12 @@ contract OrderingContract {
 
     Interaction[] public pending_interactions;
 
-    // Mapping to store domains instead of an array
+    // Mapping to store domains instead of an array, index 0 is preserved for domainless interactions
     mapping(uint => Domain) public domains;
 
     event Conflict(uint indexed domain);
+    event InteractionPoolOpen();
+    event OrdererAdded(uint domainId, uint ordererId, address ordererAddress);
 
     modifier duringVote() {
         require(
@@ -68,20 +70,55 @@ contract OrderingContract {
         view
         returns (
             uint id,
-            uint voteCount,
-            uint orderersCount,
             DomainStatus status,
-            uint[] memory orderedInteractions
+            address[] memory orderers, // returning orderers as an array
+            uint voteCount,
+            uint[] memory orderedInteractions,
+            uint orderersCount
         )
     {
         Domain storage domain = domains[domainId];
+
+        // Create an array to store orderer addresses from the mapping
+        address[] memory ordererAddresses = new address[](
+            domain.orderers_count
+        );
+        uint counter = 0;
+
+        for (uint i = 0; i < domain.orderers_count; i++) {
+            address ordererAddress = domain.orderers[i].ordererAddress;
+            ordererAddresses[counter] = ordererAddress;
+            counter++;
+        }
+
         return (
             domain.id,
-            domain.vote_count,
-            domain.orderers_count,
             domain.status,
-            domain.ordered_interactions
+            ordererAddresses,
+            domain.vote_count,
+            domain.ordered_interactions,
+            domain.orderers_count
         );
+    }
+
+    function getPendingInteractions()
+        external
+        view
+        returns (Interaction[] memory)
+    {
+        // Return the pending interactions for a specific domain
+        return pending_interactions;
+    }
+
+    function getPendingInteractionsForOrderer(
+        uint domainId,
+        address orderer
+    ) external view returns (uint[] memory) {
+        // Retrieve the list of pending interaction IDs for the given orderer
+        uint[] memory pendingInteractionIds = domains[domainId]
+            .ordererToPendingInteractions[orderer];
+
+        return pendingInteractionIds;
     }
 
     // Function to submit an interaction for ordering
@@ -115,6 +152,25 @@ contract OrderingContract {
         updateOrderers();
     }
 
+    function addOrderer(uint _domainId, address _ordererAddress) public {
+        Domain storage domain = domains[_domainId];
+
+        // Use orderers_count as the new ordererId and increment it
+        uint ordererId = domain.orderers_count;
+
+        // Add the orderer to the domain using the incremented ordererId
+        domain.orderers[ordererId] = Orderer({
+            ordererAddress: _ordererAddress,
+            voted: false
+        });
+
+        // Increment the orderers_count to prepare for the next orderer
+        domain.orderers_count++;
+
+        // Emit event for added orderer
+        emit OrdererAdded(_domainId, ordererId, _ordererAddress);
+    }
+
     // Internal function to update orderers (Intermediate orderer)
     function updateOrderers() internal {
         for (uint i = 0; i < pending_interactions.length; i++) {
@@ -132,12 +188,12 @@ contract OrderingContract {
                     ) {
                         // Add sender as an orderer if not already present
                         if (!isOrderer(domainID, sender)) {
-                            domains[domainID].orderers[sender] = Orderer(
-                                sender,
-                                false
-                            );
-                            domains[domainID].orderers_count++;
+                            addOrderer(domainID, sender);
                         }
+                        // Map interaction index to orderer
+                        domains[domainID]
+                            .ordererToPendingInteractions[sender]
+                            .push(i);
                     }
 
                     if (
@@ -146,24 +202,33 @@ contract OrderingContract {
                     ) {
                         // Add receiver as an orderer if not already present
                         if (!isOrderer(domainID, receiver)) {
-                            domains[domainID].orderers[receiver] = Orderer(
-                                receiver,
-                                false
-                            );
-                            domains[domainID].orderers_count++;
+                            addOrderer(domainID, receiver);
                         }
+                        // Map interaction index to orderer
+                        domains[domainID]
+                            .ordererToPendingInteractions[receiver]
+                            .push(i);
                     }
                 }
             }
         }
     }
 
-    // Helper function to check if a user is an orderer
+    // Helper function to check if a pariticpant is an orderer
     function isOrderer(
         uint domainId,
-        address user
+        address pariticpant
     ) internal view returns (bool) {
-        return domains[domainId].orderers[user].ordererAddress == user;
+        Domain storage domain = domains[domainId];
+
+        // Iterate over all orderers by their ID
+        for (uint i = 0; i < domain.orderers_count; i++) {
+            if (domain.orderers[i].ordererAddress == pariticpant) {
+                return true;
+            }
+        }
+
+        return false; // Pariticpant is not an orderer in this domain
     }
 
     // Function to order interactions within a domain
@@ -175,6 +240,8 @@ contract OrderingContract {
             indicesToReorder.length > 1,
             "Need at least two indices to reorder"
         );
+
+        require(isOrderer(domainId, msg.sender));
 
         Domain storage domain = domains[domainId];
         bool[] memory reorderedFlags = new bool[](pending_interactions.length);
@@ -231,8 +298,7 @@ contract OrderingContract {
         }
 
         if (checkAllDomainsStatus()) {
-            // Logic to execute all domains
-            resetData();
+            executeInteractions();
         }
     }
 
@@ -306,7 +372,28 @@ contract OrderingContract {
 
     // Internal function to execute interactions and reset contract data
     function executeInteractions() internal {
+        for (uint i = 1; i <= domain_count; i++) {
+            executeDomain(i);
+        }
         resetData();
+        emit InteractionPoolOpen();
+    }
+
+    // Internal function to execute all interactions within a specific domain
+    function executeDomain(uint domainId) internal {
+        for (
+            uint j = 0;
+            j < domains[domainId].ordered_interactions.length;
+            j++
+        ) {
+            uint instanceId = pending_interactions[j].instance;
+            string memory taskName = pending_interactions[j].task;
+
+            // We use call method to avoid cascading a revert case (we don't want the ordering contract to be interrupted by the process contract)
+            (bool success, bytes memory data) = address(process).call(
+                abi.encodeWithSignature("executeTask", instanceId, taskName)
+            );
+        }
     }
 
     // Internal function to reset contract data
@@ -317,5 +404,9 @@ contract OrderingContract {
         delete pending_interactions;
         domain_count = 0;
         index_block = 0;
+    }
+
+    function canVote() public view returns (bool) {
+        return index_block != 0 && block.number >= index_block + block_interval;
     }
 }

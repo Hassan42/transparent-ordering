@@ -20,7 +20,7 @@ app.post('/create-network', (req, res) => {
         const nodeTypes = [];
         const roles = [];
         const participantAddresses = [];
-        const NODES_NB = Object.keys(participants).length; 
+        const NODES_NB = Object.keys(participants).length;
 
         const parentPath = path.dirname(__filename);
 
@@ -38,8 +38,8 @@ app.post('/create-network', (req, res) => {
         fs.removeSync(qbftNetworkPath);
         fs.mkdirSync(qbftNetworkPath);
 
-        // Generate genesis file in the new directory
-        const genesisCmd = `yes | npx quorum-genesis-tool --consensus qbft --chainID 1337 --blockperiod 1 --emptyBlockPeriod 1 --requestTimeout 10 --epochLength 30000 --difficulty 1 --gasLimit '0xFFFFFF' --coinbase '0x0000000000000000000000000000000000000000' --validators ${NODES_NB} --members 0 --bootnodes 0 --outputPath '${path.join(qbftNetworkPath, 'artifacts')}'`;
+        // Generate genesis file with 1 member
+        const genesisCmd = `yes | npx quorum-genesis-tool --consensus qbft --chainID 1337 --blockperiod 1 --emptyBlockPeriod 1 --requestTimeout 10 --epochLength 30000 --difficulty 1 --gasLimit '0xFFFFFF' --coinbase '0x0000000000000000000000000000000000000000' --validators ${NODES_NB} --members 1 --bootnodes 0 --outputPath '${path.join(qbftNetworkPath, 'artifacts')}'`;
 
         const outputDir = execSync(genesisCmd).toString().split('\n').find(line => line.includes("artifacts/")).split(' ')[3];
 
@@ -92,14 +92,13 @@ app.post('/create-network', (req, res) => {
             }
         });
 
-        
-
         // Create permissioned nodes and configure ports using full paths
         let dockerCompose = {
             version: '3',
             services: {}
         };
 
+        // Add each validator node
         for (let i = 0; i < NODES_NB; i++) {
             const nodeDataPath = path.join(qbftNetworkPath, `Node-${i}`, 'data');
             const keystorePath = path.join(nodeDataPath, 'keystore');
@@ -208,27 +207,76 @@ app.post('/create-network', (req, res) => {
             };
         }
 
-        // Add Ethereum Lite Explorer
-        dockerCompose.services['ethereum-lite-explorer'] = {
-            image: 'alethio/ethereum-lite-explorer',
-            ports: ['80:80'],
-            environment: {
-                APP_NODE_URL: 'http://localhost:8545'
-            },
+        // Setup for member0
+        const memberDataPath = path.join(qbftNetworkPath, 'member0', 'data');
+        const memberKeystorePath = path.join(memberDataPath, 'keystore');
+
+        fs.mkdirSync(memberDataPath, { recursive: true });
+        fs.mkdirSync(memberKeystorePath, { recursive: true });
+
+        // Copy genesis and static-nodes.json
+        fs.copyFileSync(staticNodesPath, path.join(memberDataPath, 'static-nodes.json'));
+        fs.copyFileSync(path.join(goQuorumDir, 'genesis.json'), path.join(memberDataPath, 'genesis.json'));
+
+        // Copy member node keys
+        const memberDir = path.join(artifactsPath, 'member0');
+        fs.readdirSync(memberDir).forEach(file => {
+            fs.copyFileSync(path.join(memberDir, file), path.join(memberDataPath, file.startsWith('account') ? 'keystore' : '', file));
+        });
+
+        // Create start-node.sh for member0 with updated HTTP and WS ports to avoid conflicts
+        const startMemberScript = `#!/bin/sh
+        geth --datadir /data init /data/genesis.json
+        
+        ACCOUNT_ADDRESS=$(grep -o '"address": *"[^"]*"' /data/keystore/accountKeystore | grep -o '"[^"]*"$' | sed 's/"//g')
+        echo -n "" > /data/keystore/emptyPassword.txt
+        
+        # Start the Geth node for member0
+        geth --datadir /data \\
+            --networkid 1337 \\
+            --nodiscover \\
+            --verbosity 5 \\
+            --syncmode full \\
+            --emitcheckpoints \\
+            --http --http.addr 0.0.0.0 --http.port 8550 --http.corsdomain "*" --http.vhosts "*" \\
+            --ws --ws.addr 0.0.0.0 --ws.port 8551 --ws.origins "*" \\
+            --http.api admin,eth,debug,net,txpool,personal,web3,istanbul \\
+            --ws.api admin,eth,debug,net,txpool,personal,web3,istanbul \\
+            --unlock "$ACCOUNT_ADDRESS" \\
+            --allow-insecure-unlock \\
+            --password /data/keystore/emptyPassword.txt \\
+            --port 30305 \\
+            --ipcpath /tmp/geth.ipc
+        `;
+
+        fs.writeFileSync(path.join(memberDataPath, 'start-node.sh'), startMemberScript);
+
+        // Add member0 to Docker compose with updated ports
+        dockerCompose.services['member0'] = {
+            image: 'your-quorum-image',
+            ports: [
+                `30305:30305`,  // Node communication port
+                `8550:8550`,    // HTTP port mapped externally for API access
+                `8551:8551`     // WebSocket port mapped externally
+            ],
+            volumes: [
+                `${memberDataPath}:/data`
+            ],
             networks: {
                 quorum_network: {
-                    ipv4_address: '172.16.239.22'
+                    ipv4_address: '172.16.239.20'
                 }
-            }
+            },
+            entrypoint: '/data/start-node.sh'
         };
 
+
+        // Configure networks in docker-compose.yml
         dockerCompose.networks = {
             quorum_network: {
                 driver: 'bridge',
                 ipam: {
-                    config: [{
-                        subnet: '172.16.239.0/24',
-                    }]
+                    config: [{ subnet: '172.16.239.0/24' }]
                 }
             }
         };
@@ -236,10 +284,12 @@ app.post('/create-network', (req, res) => {
         const composeFilePath = path.join(qbftNetworkPath, 'docker-compose.yml');
         fs.writeFileSync(composeFilePath, yaml.dump(dockerCompose));
 
-        res.json({ message: `Network with ${NODES_NB} nodes created successfully.` });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'An error occurred while setting up the network.', error: error.message });
+        console.log("Network created successfully.");
+        res.status(201).json({ message: 'Network created successfully.' });
+
+    } catch (err) {
+        console.error('Error:', err.message);
+        res.status(500).json({ message: 'An error occurred while creating the network.' });
     }
 });
 

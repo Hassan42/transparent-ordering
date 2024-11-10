@@ -14,9 +14,10 @@ task("accounts", "Prints the list of signers", async (taskArgs, hre) => {
 
 module.exports = {
   solidity: "0.8.27",
+  defaultNetwork: "goquorum",
   networks: {
     goquorum: {
-      url: "http://localhost:8545",
+      url: "http://localhost:8550",
     },
   },
 };

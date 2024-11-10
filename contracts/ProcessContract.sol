@@ -26,8 +26,8 @@ contract ProcessContract {
             "Activity is not open"
         );
         require(
-            instances[instanceID].taskParticipants[_activity].sender ==
-                msg.sender,
+            msg.sender == orderingContractAddress ||
+            instances[instanceID].taskParticipants[_activity].sender == msg.sender,
             "Caller does not have the required role"
         );
         _;
@@ -55,9 +55,11 @@ contract ProcessContract {
     // State Variables
     uint public instancesCount;
     GlobalData public globalData;
-    mapping(uint => Instance) private instances;
+    mapping(uint => Instance) private instances; // starting from 1
+    uint256 constant SCALING_FACTOR = 100;
 
-    uint256 constant SCALING_FACTOR = 100; 
+    // Contracts
+    address public orderingContractAddress;
 
     // Constructor
     constructor() {
@@ -229,6 +231,10 @@ contract ProcessContract {
                 globalData.requestCount) / (100 * SCALING_FACTOR); // Scale down by the scaling factor
         }
         return globalData.basePrice + priceIncrease; // Return total price
+    }
+
+    function setOrderingContractAddress(address _orderingContractAddress) public {
+        orderingContractAddress = _orderingContractAddress;
     }
 
     // Getter Functions
