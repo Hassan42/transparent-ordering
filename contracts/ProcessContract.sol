@@ -180,7 +180,7 @@ contract ProcessContract {
     function executeTask(
         uint instanceID,
         string memory taskName
-    ) public isAccessible(instanceID, taskName) {
+    ) public isAccessible(instanceID, taskName)  {
 
         // Determine which task to execute
         if (compareStrings(taskName, "PurchaseOrder")) {

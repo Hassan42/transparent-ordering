@@ -2,6 +2,20 @@
   {
     "instances": [
       {
+        "instanceID": 3,
+        "deferredChoice": [
+          1,
+          0
+        ]
+      },
+      {
+        "instanceID": 1,
+        "deferredChoice": [
+          1,
+          0
+        ]
+      },
+      {
         "instanceID": 4,
         "deferredChoice": [
           1,
@@ -14,33 +28,12 @@
           1,
           0
         ]
-      },
-      {
-        "instanceID": 1,
-        "deferredChoice": [
-          0,
-          1
-        ]
-      },
-      {
-        "instanceID": 3,
-        "deferredChoice": [
-          0,
-          1
-        ]
       }
     ],
-    "delay": true
+    "delay": false
   },
   {
     "instances": [
-      {
-        "instanceID": 1,
-        "deferredChoice": [
-          1,
-          0
-        ]
-      },
       {
         "instanceID": 3,
         "deferredChoice": [
@@ -50,6 +43,13 @@
       },
       {
         "instanceID": 2,
+        "deferredChoice": [
+          0,
+          1
+        ]
+      },
+      {
+        "instanceID": 1,
         "deferredChoice": [
           0,
           1

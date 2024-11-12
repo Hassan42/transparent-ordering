@@ -252,11 +252,11 @@ async function executeTaskOC(instanceID, taskName, participant) {
 
             // Update nonce map to next expected nonce after successful transaction
             nonceMap.set(participant.publicKey, currentNonce);
-            console.log(instanceID, "end epoch")
+            console.log(instanceID, taskName, "end epoch")
             // Wait for the InteractionPoolOpen event before returning
             await new Promise((resolve) => {
                 orderingContract.once("InteractionPoolOpen", () => {
-                    console.log(instanceID, "next epoch")
+                    console.log(instanceID, taskName, "next epoch")
                     resolve();
                 });
             });
@@ -273,7 +273,6 @@ async function executeTaskOC(instanceID, taskName, participant) {
                 // await makeDelay(500);
             } else {
                 // Task not open: revert
-                console.log("test")
                 return;
             }
         }
@@ -372,7 +371,7 @@ async function deployContracts() {
         orderingContract = await OrderingContract.deploy(processContract.target);
         console.log(`OrderingContract deployed at: ${orderingContract.target}`);
 
-        await makeDelay(5000); // ethers will crash if we dont wait some time for the contract to be confirmed (unable to call view functions) (??)
+        await makeDelay(8000); // ethers will crash if we dont wait some time for the contract to be confirmed (unable to call view functions) (??)
 
         await processContract.setOrderingContractAddress(orderingContract.target);
 
@@ -510,6 +509,11 @@ async function listenForEvents() {
         await logEvent("NewPrice", eventData, transactionHash);
     });
 
+    // Listen for NewPrice event
+    orderingContract.on("Conflict", async (domainId) => {
+        console.log("conflict detected in domain in ", domainId);
+    });
+
     // Listen for TaskCompleted event
     processContract.on("TaskCompleted", async (instanceID, taskName, event) => {
         // Retrieve participant role based on taskName
@@ -547,28 +551,22 @@ async function listenForEvents() {
 
 async function orderingVotes() {
 
+    const pendingInteractions = await orderingContract.getPendingInteractions();
     // Get the total domain count
     const domainCount = await orderingContract.domain_count();
 
     // Fetch all pending interactions
-    const pendingInteractions = await orderingContract.getPendingInteractions();
 
     // Array to hold the domains
     const domains = [];
 
+    console.log("domain count", domainCount)
     // Loop through each domain to get their details
     for (let i = 1; i <= domainCount; i++) {
         const domain = await orderingContract.getDomainByIndex(i);
-        const filteredInteractionsByDomain = pendingInteractions.filter(interaction => interaction.domain === i);
-
-        // Add filtered interactions to the domain object
-        const domainWithInteractions = {
-            ...domain,
-            pendingInteractions: filteredInteractionsByDomain,
-        };
 
         // Push the updated domain to the domains array
-        domains.push(domainWithInteractions);
+        domains.push(domain);
 
         // Populate the orderers array for the current domain
         for (let j = 0; j < domain.orderers.length; j++) {
@@ -576,17 +574,25 @@ async function orderingVotes() {
 
             // Fetch the pending interactions for the current orderer
             const pendingInteractionsForOrderer = await orderingContract.getPendingInteractionsForOrderer(domain.id, ordererAddress);
-            
-            const indicesToReorder = shuffleArray(pendingInteractionsForOrderer); // TODO: different strategy to order
 
-            console.log(ordererAddress, pendingInteractionsForOrderer)
+            let indicesToReorder = shuffleArray(pendingInteractionsForOrderer); // TODO: different strategy to order
 
-            // await orderingContract.orderInteraction(domain.domainId, indicesToReorder);
+            // Convert domain ID and indices if necessary
+            let domainId = Number(domain.id); // Or domain.domainId, if that's correct
+            indicesToReorder = indicesToReorder.map(index => Number(index));
+
+            console.log(ordererAddress, domainId, indicesToReorder)
+
+            let tx = await orderingContract.orderInteraction(domainId, indicesToReorder);
+
+            await tx.wait();
 
         }
-    }  
+    }
 
     console.log(domains)
+    // console.log(pendingInteractions)
+
     // Check for the next ordering phase
     // checkAndEmitCanVoteEvent();
 }

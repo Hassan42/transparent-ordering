@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import "./IProcessContract.sol";
 
-contract OrderingContract {
+contract OrderingContractPassive {
     IProcessContract public process;
 
     uint public block_interval = 5;
@@ -37,8 +37,7 @@ contract OrderingContract {
     enum DomainStatus {
         Pending,
         Completed,
-        Conflict,
-        Merged
+        Conflict
     }
 
     Interaction[] public pending_interactions;
@@ -148,9 +147,6 @@ contract OrderingContract {
                 domain: 0
             })
         );
-
-        updateDomains();
-        updateOrderers();
     }
 
     function addOrderer(uint _domainId, address _ordererAddress) public {
@@ -172,49 +168,38 @@ contract OrderingContract {
         emit OrdererAdded(_domainId, ordererId, _ordererAddress);
     }
 
-    function updateOrderers() internal {
+    function generateOrderers() internal {
         // Get the last interaction in the list
-        uint i = pending_interactions.length - 1;
-        address sender = pending_interactions[i].sender;
-        address receiver = pending_interactions[i].receiver;
-        uint domainID = pending_interactions[i].domain;
+        for (uint i = 0; i < pending_interactions.length; i++) {
+            address sender = pending_interactions[i].sender;
+            address receiver = pending_interactions[i].receiver;
+            uint domainID = pending_interactions[i].domain;
 
-        bool senderMatched = false;
-        bool receiverMatched = false;
-
-        for (uint j = 0; j < i; j++) {
-            if (i != j) {
-                // Check if sender matches any previous interaction
-                if (matchParticipant(sender, j)) {
-                    if (!isOrderer(domainID, sender)) {
-                        addOrderer(domainID, sender);
+            for (uint j = 0; j < pending_interactions.length; j++) {
+                if (i != j) {
+                    // Check if sender matches any previous interaction
+                    if (matchParticipant(sender, j)) {
+                        if (!isOrderer(domainID, sender)) {
+                            addOrderer(domainID, sender);
+                        }
+                        domains[domainID]
+                            .ordererToPendingInteractions[sender]
+                            .push(j);
+                        continue;
                     }
-                    domains[domainID].ordererToPendingInteractions[sender].push(
-                            j
-                        );
-                    senderMatched = true;
-                    continue;
-                }
 
-                // Check if receiver matches any previous interaction
-                if (matchParticipant(receiver, j)) {
-                    if (!isOrderer(domainID, receiver)) {
-                        addOrderer(domainID, receiver);
+                    // Check if receiver matches any previous interaction
+                    if (matchParticipant(receiver, j)) {
+                        if (!isOrderer(domainID, receiver)) {
+                            addOrderer(domainID, receiver);
+                        }
+                        domains[domainID]
+                            .ordererToPendingInteractions[receiver]
+                            .push(j);
+                        continue;
                     }
-                    domains[domainID]
-                        .ordererToPendingInteractions[receiver]
-                        .push(j);
-                    receiverMatched = true;
                 }
             }
-        }
-
-        // After the loop, add the current interaction index `i` only once if there was a match
-        if (senderMatched) {
-            domains[domainID].ordererToPendingInteractions[sender].push(i);
-        }
-        if (receiverMatched) {
-            domains[domainID].ordererToPendingInteractions[receiver].push(i);
         }
     }
 
@@ -244,6 +229,12 @@ contract OrderingContract {
         return false; // Pariticpant is not an orderer in this domain
     }
 
+    function generateOrderersAndDomains() internal {
+        require(domain_count == 0);
+        generateDomains();
+        generateOrderers();
+    }
+
     // Function to order interactions within a domain
     function orderInteraction(
         uint domainId,
@@ -254,8 +245,7 @@ contract OrderingContract {
             "Need at least two indices to reorder"
         );
 
-        // require(isOrderer(domainId, msg.sender));
-        //TODO: check if the interaction are within the list of the orderer
+        require(isOrderer(domainId, msg.sender));
 
         Domain storage domain = domains[domainId];
         bool[] memory reorderedFlags = new bool[](pending_interactions.length);
@@ -298,7 +288,6 @@ contract OrderingContract {
                     anchorIndex = existingIndex;
                 } else {
                     // Conflict detected between ordered interactions
-                    domain.status = DomainStatus.Conflict;
                     emit Conflict(domainId);
                     break;
                 }
@@ -308,8 +297,7 @@ contract OrderingContract {
             }
         }
 
-        // Mark as complete all votes are included and not in conflict
-        if (domain.vote_count == domain.orderers_count && domain.status != DomainStatus.Conflict) {
+        if (domain.vote_count == domain.orderers_count) {
             domain.status = DomainStatus.Completed;
         }
 
@@ -318,148 +306,50 @@ contract OrderingContract {
         }
     }
 
-    // Internal function to update domains for the last pending interaction
-    function updateDomains() internal {
-        if (pending_interactions.length == 0) {
-            return; // Exit if there are no interactions
-        }
+    // Internal function to update domains for pending interactions
+    function generateDomains() internal {
+        for (uint i = 0; i < pending_interactions.length; i++) {
+            Interaction memory current_interaction = pending_interactions[i];
+            uint domainId = current_interaction.domain;
 
-        uint lastInteractionIndex = pending_interactions.length - 1;
-        Interaction memory currentInteraction = pending_interactions[
-            lastInteractionIndex
-        ];
-        uint domainId = currentInteraction.domain;
-
-        if (domainId == 0) {
-            domainId = findAndAssignDomain(lastInteractionIndex);
-            pending_interactions[lastInteractionIndex].domain = domainId;
+            if (domainId == 0) {
+                domainId = findOrCreateDomain(i);
+                pending_interactions[i].domain = domainId;
+            }
         }
     }
 
-    /**
-     *      Finds an appropriate domain for a given interaction. If no suitable
-     *      domain is found, a new one is created only if there are matched interactions.
-     *      If no matches are found, returns 0 to indicate no domain assignment.
-     * @param interactionIndex Index of the interaction within `pending_interactions`
-     *                         for which we are finding or creating a domain.
-     * @return uint The domain ID assigned to the interaction, or 0 if no domain was isolated.
-     */
-    function findAndAssignDomain(
-        uint interactionIndex
-    ) internal returns (uint) {
+    // Helper function to find or create a domain
+    function findOrCreateDomain(uint interactionIndex) internal returns (uint) {
         Interaction memory currentInteraction = pending_interactions[
             interactionIndex
         ];
-        uint[] memory matchedIndexes = new uint[](pending_interactions.length);
-        uint matchCount = 0;
-        uint primaryDomainId = 0;
-        uint[] memory relatedDomains = new uint[](pending_interactions.length);
-        uint relatedDomainCount = 0;
 
-        // Iterate over previous interactions to find matches with the current one.
-        // Matches are based on shared sender or receiver addresses.
-        for (uint j = 0; j < interactionIndex; j++) {
-            Interaction memory otherInteraction = pending_interactions[j];
+        for (uint j = 0; j < pending_interactions.length; j++) {
+            if (interactionIndex == j) {
+                continue; // Skip the current interaction itself
+            }
 
-            bool isMatch = (currentInteraction.sender ==
-                otherInteraction.sender ||
-                currentInteraction.sender == otherInteraction.receiver ||
-                currentInteraction.receiver == otherInteraction.sender ||
-                currentInteraction.receiver == otherInteraction.receiver);
+            Interaction memory nextInteraction = pending_interactions[j];
 
-            if (isMatch) {
-                uint otherDomainId = otherInteraction.domain;
-
-                if (otherDomainId != 0) {
-                    // Check if the other interaction has a domain and track it if not already tracked.
-                    bool isDomainTracked = false;
-                    for (uint k = 0; k < relatedDomainCount; k++) {
-                        if (relatedDomains[k] == otherDomainId) {
-                            isDomainTracked = true;
-                            break;
-                        }
-                    }
-                    if (!isDomainTracked) {
-                        // Add this domain ID to `relatedDomains` to track domains that need merging.
-                        relatedDomains[relatedDomainCount] = otherDomainId;
-                        relatedDomainCount++;
-                    }
-                } else {
-                    // If the other interaction doesn't have a domain, add it to matched indexes.
-                    matchedIndexes[matchCount] = j;
-                    matchCount++;
-                }
+            // Check if there's an existing domain for the matched interaction
+            if (
+                nextInteraction.domain != 0 &&
+                (currentInteraction.sender == nextInteraction.sender ||
+                    currentInteraction.sender == nextInteraction.receiver ||
+                    currentInteraction.receiver == nextInteraction.sender ||
+                    currentInteraction.receiver == nextInteraction.receiver)
+            ) {
+                return nextInteraction.domain;
             }
         }
 
-        // If there are related domains, merge them into a single primary domain.
-        if (relatedDomainCount > 0) {
-            primaryDomainId = relatedDomains[0];
-            Domain storage primaryDomain = domains[primaryDomainId];
-
-            // Merge all additional related domains into the primary domain.
-            for (uint d = 1; d < relatedDomainCount; d++) {
-                uint domainIdToMerge = relatedDomains[d];
-                Domain storage domainToMerge = domains[domainIdToMerge];
-
-                // Aggregate the vote count and orderers count.
-                primaryDomain.vote_count += domainToMerge.vote_count;
-                primaryDomain.orderers_count += domainToMerge.orderers_count;
-
-                // Transfer orderers from the domain being merged to the primary domain.
-                for (
-                    uint ordererId = 0;
-                    ordererId < domainToMerge.orderers_count;
-                    ordererId++
-                ) {
-                    primaryDomain.orderers[
-                        primaryDomain.orderers_count++
-                    ] = domainToMerge.orderers[ordererId];
-                }
-
-                // Transfer `ordererToPendingInteractions` mappings to the primary domain.
-                for (uint i = 0; i < domainToMerge.orderers_count; i++) {
-                    address ordererAddress = domainToMerge
-                        .orderers[i]
-                        .ordererAddress;
-                    uint[] memory interactions = domainToMerge
-                        .ordererToPendingInteractions[ordererAddress];
-                    for (uint j = 0; j < interactions.length; j++) {
-                        primaryDomain
-                            .ordererToPendingInteractions[ordererAddress]
-                            .push(interactions[j]);
-                    }
-                }
-
-                // Mark the merged domain as "Merged".
-                domainToMerge.status = DomainStatus.Merged;
-            }
-
-            // Assign the primary domain ID to the current interaction and all matched interactions.
-            pending_interactions[interactionIndex].domain = primaryDomainId;
-            for (uint k = 0; k < matchCount; k++) {
-                pending_interactions[matchedIndexes[k]]
-                    .domain = primaryDomainId;
-            }
-
-            return primaryDomainId;
-        }
-
-        // Only create a new domain if there are matched interactions.
-        if (matchCount > 0) {
-            domain_count++;
-            Domain storage newDomain = domains[domain_count];
-            newDomain.id = domain_count;
-            newDomain.status = DomainStatus.Pending;
-
-            // Assign the new domain ID to all matched interactions and the current interaction.
-            for (uint k = 0; k < matchCount; k++) {
-                pending_interactions[matchedIndexes[k]].domain = domain_count;
-            }
-            return domain_count;
-        }
-
-        return 0; // Isolated interaction until this moment
+        // If no domain matches, create a new one
+        domain_count++;
+        Domain storage newDomain = domains[domain_count];
+        newDomain.id = domain_count;
+        newDomain.status = DomainStatus.Pending;
+        return domain_count;
     }
 
     // Function to check if all domains are either completed or in conflict
@@ -477,26 +367,23 @@ contract OrderingContract {
         require(
             index_block != 0 &&
                 block.number >= index_block + block_interval &&
-                domain_count == 0,
+                domain_count >= 1,
             "Cannot release"
         );
 
-        for (uint i = 0; i < pending_interactions.length; i++) {
-            require(pending_interactions[i].domain == 0);
-            uint instanceId = pending_interactions[i].instance;
-            string memory taskName = pending_interactions[i].task;
-            (bool success, bytes memory data) = address(process).call(
-                abi.encodeWithSignature("executeTask", instanceId, taskName)
+        for (uint i = 1; i <= domain_count; i++) {
+            require(
+                domains[i].orderers_count == 0,
+                "Not all domains have zero orderers"
             );
         }
-        resetData();
-        emit InteractionPoolOpen();
+
+        executeInteractions();
     }
 
     // Internal function to execute interactions and reset contract data
     function executeInteractions() internal {
         for (uint i = 1; i <= domain_count; i++) {
-            if (domains[i].status == DomainStatus.Conflict) { continue; }
             executeDomain(i);
         }
         resetData();
@@ -505,7 +392,6 @@ contract OrderingContract {
 
     // Internal function to execute all interactions within a specific domain
     function executeDomain(uint domainId) internal {
-
         for (
             uint j = 0;
             j < domains[domainId].ordered_interactions.length;
@@ -516,7 +402,7 @@ contract OrderingContract {
 
             // We use call method to avoid cascading a revert case (we don't want the ordering contract to be interrupted by the process contract)
             (bool success, bytes memory data) = address(process).call(
-                abi.encodeWithSignature("executeTask(uint256,string)", instanceId, taskName)
+                abi.encodeWithSignature("executeTask", instanceId, taskName)
             );
         }
     }
