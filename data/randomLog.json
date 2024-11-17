@@ -2,10 +2,10 @@
   {
     "instances": [
       {
-        "instanceID": 3,
+        "instanceID": 2,
         "deferredChoice": [
-          1,
-          0
+          0,
+          1
         ]
       },
       {
@@ -23,7 +23,7 @@
         ]
       },
       {
-        "instanceID": 2,
+        "instanceID": 3,
         "deferredChoice": [
           1,
           0
@@ -42,7 +42,7 @@
         ]
       },
       {
-        "instanceID": 2,
+        "instanceID": 4,
         "deferredChoice": [
           0,
           1
@@ -51,18 +51,18 @@
       {
         "instanceID": 1,
         "deferredChoice": [
-          0,
-          1
+          1,
+          0
         ]
       },
       {
-        "instanceID": 4,
+        "instanceID": 2,
         "deferredChoice": [
           1,
           0
         ]
       }
     ],
-    "delay": true
+    "delay": false
   }
 ]

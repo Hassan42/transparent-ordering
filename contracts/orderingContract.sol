@@ -38,7 +38,8 @@ contract OrderingContract {
         Pending,
         Completed,
         Conflict,
-        Merged
+        Merged,
+        Executed
     }
 
     Interaction[] public pending_interactions;
@@ -179,10 +180,11 @@ contract OrderingContract {
         address receiver = pending_interactions[i].receiver;
         uint domainID = pending_interactions[i].domain;
 
+        // Boolean falgs to add the current interaction to the list of the orderer (to avoid duplication)
         bool senderMatched = false;
         bool receiverMatched = false;
 
-        for (uint j = 0; j < i; j++) {
+        for (uint j = 0; j < pending_interactions.length; j++) {
             if (i != j) {
                 // Check if sender matches any previous interaction
                 if (matchParticipant(sender, j)) {
@@ -192,7 +194,13 @@ contract OrderingContract {
                     domains[domainID].ordererToPendingInteractions[sender].push(
                             j
                         );
-                    senderMatched = true;
+                    if (!senderMatched) {
+                        domains[domainID]
+                            .ordererToPendingInteractions[sender]
+                            .push(i);
+                        senderMatched = true;
+                    }
+
                     continue;
                 }
 
@@ -204,19 +212,20 @@ contract OrderingContract {
                     domains[domainID]
                         .ordererToPendingInteractions[receiver]
                         .push(j);
-                    receiverMatched = true;
+
+                    if (!receiverMatched) {
+                        domains[domainID]
+                            .ordererToPendingInteractions[receiver]
+                            .push(i);
+                        receiverMatched = true;
+                    }
+
+                    continue;
                 }
             }
         }
-
-        // After the loop, add the current interaction index `i` only once if there was a match
-        if (senderMatched) {
-            domains[domainID].ordererToPendingInteractions[sender].push(i);
-        }
-        if (receiverMatched) {
-            domains[domainID].ordererToPendingInteractions[receiver].push(i);
-        }
     }
+
 
     // Helper function to check if the participant matches another interaction's sender or receiver
     function matchParticipant(
@@ -255,6 +264,7 @@ contract OrderingContract {
         );
 
         // require(isOrderer(domainId, msg.sender));
+        require(domains[domainId].status == DomainStatus.Pending);
         //TODO: check if the interaction are within the list of the orderer
 
         Domain storage domain = domains[domainId];
@@ -309,7 +319,10 @@ contract OrderingContract {
         }
 
         // Mark as complete all votes are included and not in conflict
-        if (domain.vote_count == domain.orderers_count && domain.status != DomainStatus.Conflict) {
+        if (
+            domain.vote_count == domain.orderers_count &&
+            domain.status != DomainStatus.Conflict
+        ) {
             domain.status = DomainStatus.Completed;
         }
 
@@ -496,7 +509,9 @@ contract OrderingContract {
     // Internal function to execute interactions and reset contract data
     function executeInteractions() internal {
         for (uint i = 1; i <= domain_count; i++) {
-            if (domains[i].status == DomainStatus.Conflict) { continue; }
+            if (domains[i].status == DomainStatus.Conflict || domains[i].status == DomainStatus.Executed) {
+                continue;
+            }
             executeDomain(i);
         }
         resetData();
@@ -505,7 +520,6 @@ contract OrderingContract {
 
     // Internal function to execute all interactions within a specific domain
     function executeDomain(uint domainId) internal {
-
         for (
             uint j = 0;
             j < domains[domainId].ordered_interactions.length;
@@ -516,18 +530,20 @@ contract OrderingContract {
 
             // We use call method to avoid cascading a revert case (we don't want the ordering contract to be interrupted by the process contract)
             (bool success, bytes memory data) = address(process).call(
-                abi.encodeWithSignature("executeTask(uint256,string)", instanceId, taskName)
+                abi.encodeWithSignature(
+                    "executeTask(uint256,string)",
+                    instanceId,
+                    taskName
+                )
             );
         }
+
+        domains[domainId].status = DomainStatus.Executed;
     }
 
     // Internal function to reset contract data
     function resetData() internal {
-        for (uint i = 1; i <= domain_count; i++) {
-            delete domains[i];
-        }
         delete pending_interactions;
-        domain_count = 0;
         index_block = 0;
     }
 

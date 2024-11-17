@@ -17,9 +17,7 @@ let orderingContract;
 // Instances with participants data
 let instancesDetails;
 
-
-
-// Tasks Information
+// Tasks Information (Could be fetched from smart contract or other sources)
 const taskSenderMap = {
     "PurchaseOrder": "customer",
     "ConfirmOrder": "retailer",
@@ -561,6 +559,7 @@ async function orderingVotes() {
     const domains = [];
 
     console.log("domain count", domainCount)
+    console.log("interactions", pendingInteractions)
     // Loop through each domain to get their details
     for (let i = 1; i <= domainCount; i++) {
         const domain = await orderingContract.getDomainByIndex(i);
@@ -568,6 +567,9 @@ async function orderingVotes() {
         // Push the updated domain to the domains array
         domains.push(domain);
 
+        console.log(domains);
+
+        
         // Populate the orderers array for the current domain
         for (let j = 0; j < domain.orderers.length; j++) {
             const ordererAddress = domain.orderers[j];
@@ -581,8 +583,11 @@ async function orderingVotes() {
             let domainId = Number(domain.id); // Or domain.domainId, if that's correct
             indicesToReorder = indicesToReorder.map(index => Number(index));
 
-            console.log(ordererAddress, domainId, indicesToReorder)
+            console.log(ordererAddress, domainId, pendingInteractionsForOrderer)
 
+            if (domain.status != Number(0)) {
+                continue;
+            }
             let tx = await orderingContract.orderInteraction(domainId, indicesToReorder);
 
             await tx.wait();
@@ -590,11 +595,8 @@ async function orderingVotes() {
         }
     }
 
-    console.log(domains)
-    // console.log(pendingInteractions)
-
     // Check for the next ordering phase
-    // checkAndEmitCanVoteEvent();
+    checkAndEmitCanVoteEvent();
 }
 
 async function logEvent(eventName, eventData, transactionHash) {
