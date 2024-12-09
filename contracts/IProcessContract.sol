@@ -46,10 +46,7 @@ interface IProcessContract {
 
     function CancelOrder(uint instanceID) external;
 
-    function executeTask(
-        uint instanceID,
-        string memory taskName
-    ) external;
+    function executeTask(uint instanceID, string memory taskName) external;
 
     // Global Data Reset
     function resetData() external;
@@ -64,7 +61,9 @@ interface IProcessContract {
 
     function calculatePrice() external view returns (uint256);
 
-    function setOrderingContractAddress(address _orderingContractAddress) external;
+    function setOrderingContractAddress(
+        address _orderingContractAddress
+    ) external;
 
     // Getter Functions
     function getTaskState(
@@ -84,4 +83,6 @@ interface IProcessContract {
     function getParticipants(
         uint instanceID
     ) external view returns (address[] memory);
+
+    function getAllParticipants() external view returns (address[] memory);
 }

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.0;
 
 import "./IProcessContract.sol";
+import "hardhat/console.sol";
 
 contract OrderingContract {
     IProcessContract public process;
@@ -44,8 +45,34 @@ contract OrderingContract {
     Interaction[] public pending_interactions;
 
     // Mapping to store domains instead of an array, index 0 is preserved for domainless interactions
+    // TODO: Add domains in epochs struct mapping
     mapping(uint => Domain) public domains;
 
+    // EXTERNAL
+    struct ExternalOrderer {
+        address ordererAddress;
+        bool valid;
+        bool voted;
+    }
+    enum EpochStatus {
+        Pending,
+        Completed,
+        Conflict,
+        Executed
+    }
+    struct Epoch {
+        uint id;
+        //mapping(uint => Domain) public domains;
+        mapping(uint => ExternalOrderer) externalOrderers;
+        uint[] ordered_interactions;
+        uint vote_count;
+        uint externalOrderersCount;
+        uint validOrderersCount;
+        EpochStatus status;
+    }
+
+    mapping(uint => Epoch) public epochs;
+    // EXTERNAL
 
     event Conflict(uint indexed domain);
     event InteractionPoolOpen();
@@ -103,7 +130,17 @@ contract OrderingContract {
         );
     }
 
-    function getPendingInteractions()
+    function getPendingInteractions() external view returns (uint[] memory) {
+        uint[] memory interactionIds = new uint[](pending_interactions.length);
+
+        for (uint i = 0; i < pending_interactions.length; i++) {
+            interactionIds[i] = i; // Collect IDs
+        }
+
+        return interactionIds;
+    }
+
+    function getPendingInteractionsStruct()
         external
         view
         returns (Interaction[] memory)
@@ -141,10 +178,41 @@ contract OrderingContract {
         return matchingIndices;
     }
 
+    function getEpochextErnalOrderersCount(
+        uint epochId
+    ) public view returns (uint) {
+        return epochs[epochId].validOrderersCount;
+    }
+
+    function getExternalOrderersForEpoch(
+        uint epochId
+    ) public view returns (ExternalOrderer[] memory) {
+        // Fetch the epoch
+        Epoch storage epoch = epochs[epochId];
+
+        // Initialize an array to hold the external orderers
+        ExternalOrderer[] memory orderers = new ExternalOrderer[](
+            epoch.externalOrderersCount
+        );
+
+        // Populate the array with external orderers
+        uint count = 0;
+        for (uint i = 0; i < epoch.externalOrderersCount; i++) {
+            orderers[count] = epoch.externalOrderers[i];
+            count++;
+        }
+
+        return orderers;
+    }
+
     // Function to submit an interaction for ordering
     function submitInteraction(uint instance, string memory task) external {
         if (index_block == 0) {
             index_block = block.number;
+            //Start a new epoch (EXTERNAL)
+            Epoch storage newEpoch = epochs[index_block];
+            newEpoch.id = index_block;
+            newEpoch.externalOrderersCount = 0;
         }
 
         require(
@@ -169,8 +237,10 @@ contract OrderingContract {
         );
 
         updateDomains();
-        // updateOrderers();
-        updateOrderersAll();
+        updateOrderers();
+        // updateOrderersAll();
+        // Should always be coupled with all or intermediate
+        updateOrderersExternal();
     }
 
     function addOrderer(uint _domainId, address _ordererAddress) public {
@@ -192,26 +262,70 @@ contract OrderingContract {
         emit OrdererAdded(_domainId, ordererId, _ordererAddress);
     }
 
+    // Update the external list, if empty fallback to all orderers or intermediate.
     function updateOrderersExternal() internal {
-        // Update the external list, if empty fallback to all orderers or intermediate. 
-           
+        // If we have no external orderers yet, populate them. (TODO:Should be done in the initialization phase)
+        if (epochs[index_block].externalOrderersCount == 0) {
+            address[] memory allParticipants = process.getAllParticipants();
+            for (uint k = 0; k < allParticipants.length; k++) {
+                // If already participant skip
+                if (isOrdererExternal(index_block, allParticipants[k])) {
+                    continue;
+                }
+                epochs[index_block].externalOrderers[
+                    epochs[index_block].externalOrderersCount
+                ] = ExternalOrderer({
+                    ordererAddress: allParticipants[k],
+                    voted: false,
+                    valid: true
+                });
+                epochs[index_block].externalOrderersCount++;
+                epochs[index_block].validOrderersCount++;
+            }
+        }
+
+        uint currentExternalOrderersCount = epochs[index_block]
+            .externalOrderersCount;
+
+        require(
+            epochs[index_block].externalOrderersCount != 0,
+            "External Orderers should not be empty"
+        );
+
+        // Get the last interaction in the list
+        uint i = pending_interactions.length - 1;
+
+        for (uint k = 0; k < currentExternalOrderersCount; k++) {
+            if (
+                matchParticipant(
+                    epochs[index_block].externalOrderers[k].ordererAddress,
+                    i
+                ) && epochs[index_block].externalOrderers[k].valid == true
+            ) {
+                epochs[index_block].externalOrderers[k].valid = false;
+                epochs[index_block].validOrderersCount--;
+            }
+        }
     }
 
     function updateOrderersAll() internal {
-        // Get the last interaction in the list
-        uint i = pending_interactions.length - 1;
-        address sender = pending_interactions[i].sender;
-        address receiver = pending_interactions[i].receiver;
-        uint domainID = pending_interactions[i].domain;
+        uint interactionsCount = pending_interactions.length;
 
-        // Add sender to the orderer list if not already added
-        if (!isOrderer(domainID, sender)) {
-            addOrderer(domainID, sender);
-        }
+        for (uint i = 0; i < interactionsCount; i++) {
+            Interaction memory interaction = pending_interactions[i];
+            address sender = interaction.sender;
+            address receiver = interaction.receiver;
+            uint domainID = interaction.domain;
 
-        // Add receiver to the orderer list if not already added
-        if (!isOrderer(domainID, receiver)) {
-            addOrderer(domainID, receiver);
+            // Add sender to the orderer list if not already added
+            if (!isOrderer(domainID, sender)) {
+                addOrderer(domainID, sender);
+            }
+
+            // Add receiver to the orderer list if not already added
+            if (!isOrderer(domainID, receiver)) {
+                addOrderer(domainID, receiver);
+            }
         }
     }
 
@@ -269,14 +383,110 @@ contract OrderingContract {
         return false; // Pariticpant is not an orderer in this domain
     }
 
+    // Helper function to check if a pariticpant is an orderer
+    function isOrdererExternal(
+        uint epochId,
+        address pariticpant
+    ) internal view returns (bool) {
+        Epoch storage epoch = epochs[epochId];
+
+        // Iterate over all orderers by their ID
+        for (uint i = 0; i < epoch.externalOrderersCount; i++) {
+            if (epoch.externalOrderers[i].ordererAddress == pariticpant) {
+                return true;
+            }
+        }
+
+        return false; // Pariticpant is not an orderer in this domain
+    }
+
+    // Function to order interactions within an epoch
+    function orderInteractionExternal(
+        uint[] calldata indicesToReorder
+    ) external duringVote {
+        require(
+            indicesToReorder.length > 0,
+            "Need at least two index to reorder"
+        );
+
+        // require(isOrderer(domainId, msg.sender), "Sender is not an orderer"); (dev)
+
+        Epoch storage epoch = epochs[index_block];
+        bool[] memory reorderedFlags = new bool[](pending_interactions.length);
+
+        for (uint i = 0; i < indicesToReorder.length; i++) {
+            uint index = indicesToReorder[i];
+
+            require(
+                index < pending_interactions.length,
+                "Invalid interaction ID"
+            );
+            require(
+                !reorderedFlags[index],
+                "Duplicate interaction ID in the order"
+            );
+
+            // check if the interaction are within the list of the orderer (dev)
+            // require(
+            //     matchParticipant(msg.sender, index),
+            //     "Not allowed to order this interaction"
+            // );
+
+            reorderedFlags[index] = true;
+        }
+
+        epoch.vote_count++;
+
+        uint anchorIndex = 0;
+        uint existingIndex = 0;
+
+        for (uint i = 0; i < indicesToReorder.length; i++) {
+            uint currentIndex = indicesToReorder[i];
+
+            // Check if the interaction exists in domain's ordered_interactions
+            bool existsInOrdered = false;
+            for (uint j = 0; j < epoch.ordered_interactions.length; j++) {
+                if (epoch.ordered_interactions[j] == currentIndex) {
+                    existsInOrdered = true;
+                    existingIndex = j;
+                    break;
+                }
+            }
+
+            // If interaction is found, check for conflicts
+            if (existsInOrdered) {
+                if (existingIndex >= anchorIndex) {
+                    anchorIndex = existingIndex;
+                } else {
+                    // Conflict detected between ordered interactions
+                    epoch.status = EpochStatus.Conflict;
+                    emit Conflict(index_block);
+                    break;
+                }
+            } else {
+                // Add interaction to ordered_interactions if it doesn't exist
+                epoch.ordered_interactions.push(currentIndex);
+            }
+        }
+
+        // Mark as complete all votes are included and not in conflict
+        if (
+            epoch.vote_count == epoch.validOrderersCount &&
+            epoch.status != EpochStatus.Conflict
+        ) {
+            epoch.status = EpochStatus.Completed;
+            executeInteractionsExternal();
+        }
+    }
+
     // Function to order interactions within a domain
     function orderInteraction(
         uint domainId,
         uint[] calldata indicesToReorder
     ) external duringVote {
         require(
-            indicesToReorder.length > 1,
-            "Need at least two indices to reorder"
+            indicesToReorder.length > 0,
+            "Need at least one index to reorder"
         );
 
         // require(isOrderer(domainId, msg.sender), "Sender is not an orderer"); (dev)
@@ -529,6 +739,44 @@ contract OrderingContract {
             }
             executeDomain(i);
         }
+        resetData();
+        emit InteractionPoolOpen();
+    }
+
+    // Internal function to execute interactions and reset contract data
+    function executeInteractionsExternal() internal {
+        require(epochs[index_block].status == EpochStatus.Completed);
+
+        for (
+            uint j = 0;
+            j < epochs[index_block].ordered_interactions.length;
+            j++
+        ) {
+            uint instanceId = pending_interactions[j].instance;
+            string memory taskName = pending_interactions[j].task;
+
+            // We use call method to avoid cascading a revert case (we don't want the ordering contract to be interrupted by the process contract)
+            (bool success, bytes memory data) = address(process).call(
+                abi.encodeWithSignature(
+                    "executeTask(uint256,string)",
+                    instanceId,
+                    taskName
+                )
+            );
+        }
+
+        for (uint i = 1; i <= domain_count; i++) {
+            if (
+                domains[i].status == DomainStatus.Conflict ||
+                domains[i].status == DomainStatus.Executed
+            ) {
+                continue;
+            }
+            domains[i].status = DomainStatus.Executed;
+        }
+
+        epochs[index_block].status = EpochStatus.Executed;
+
         resetData();
         emit InteractionPoolOpen();
     }

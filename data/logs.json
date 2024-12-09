@@ -4,62 +4,36 @@
     "data": {
       "instanceID": "1"
     },
-    "gasUsed": "384932",
-    "blockNumber": "18490",
-    "timestamp": "2024-12-06T16:23:14.329Z"
+    "gasUsed": "384944",
+    "blockNumber": "2565",
+    "timestamp": "2024-12-09T17:14:01.173Z"
   },
   {
     "event": "InstanceCreated",
     "data": {
       "instanceID": "2"
     },
-    "gasUsed": "367832",
-    "blockNumber": "18492",
-    "timestamp": "2024-12-06T16:23:16.325Z"
+    "gasUsed": "367844",
+    "blockNumber": "2567",
+    "timestamp": "2024-12-09T17:14:03.165Z"
   },
   {
     "event": "InstanceCreated",
     "data": {
       "instanceID": "3"
     },
-    "gasUsed": "347932",
-    "blockNumber": "18494",
-    "timestamp": "2024-12-06T16:23:18.329Z"
+    "gasUsed": "347944",
+    "blockNumber": "2569",
+    "timestamp": "2024-12-09T17:14:05.178Z"
   },
   {
     "event": "InstanceCreated",
     "data": {
       "instanceID": "4"
     },
-    "gasUsed": "347932",
-    "blockNumber": "18496",
-    "timestamp": "2024-12-06T16:23:20.336Z"
-  },
-  {
-    "event": "TaskCompleted",
-    "data": {
-      "instanceID": "4",
-      "taskName": "PurchaseOrder",
-      "sender": "customer2",
-      "receiver": "retailer2",
-      "executionCount": 2
-    },
-    "gasUsed": "192139",
-    "blockNumber": "18526",
-    "timestamp": "2024-12-06T16:23:50.523Z"
-  },
-  {
-    "event": "TaskCompleted",
-    "data": {
-      "instanceID": "2",
-      "taskName": "PurchaseOrder",
-      "sender": "customer1",
-      "receiver": "retailer2",
-      "executionCount": 1
-    },
-    "gasUsed": "192139",
-    "blockNumber": "18526",
-    "timestamp": "2024-12-06T16:23:50.523Z"
+    "gasUsed": "347944",
+    "blockNumber": "2571",
+    "timestamp": "2024-12-09T17:14:07.174Z"
   },
   {
     "event": "TaskCompleted",
@@ -68,11 +42,11 @@
       "taskName": "PurchaseOrder",
       "sender": "customer1",
       "receiver": "retailer1",
-      "executionCount": 3
+      "executionCount": 1
     },
-    "gasUsed": "192139",
-    "blockNumber": "18526",
-    "timestamp": "2024-12-06T16:23:50.526Z"
+    "gasUsed": "252170",
+    "blockNumber": "2580",
+    "timestamp": "2024-12-09T17:14:16.085Z"
   },
   {
     "event": "TaskCompleted",
@@ -81,48 +55,48 @@
       "taskName": "PurchaseOrder",
       "sender": "customer2",
       "receiver": "retailer1",
+      "executionCount": 2
+    },
+    "gasUsed": "252170",
+    "blockNumber": "2580",
+    "timestamp": "2024-12-09T17:14:16.085Z"
+  },
+  {
+    "event": "TaskCompleted",
+    "data": {
+      "instanceID": "2",
+      "taskName": "PurchaseOrder",
+      "sender": "customer1",
+      "receiver": "retailer2",
+      "executionCount": 3
+    },
+    "gasUsed": "252170",
+    "blockNumber": "2580",
+    "timestamp": "2024-12-09T17:14:16.109Z"
+  },
+  {
+    "event": "TaskCompleted",
+    "data": {
+      "instanceID": "4",
+      "taskName": "PurchaseOrder",
+      "sender": "customer2",
+      "receiver": "retailer2",
       "executionCount": 4
     },
-    "gasUsed": "192139",
-    "blockNumber": "18526",
-    "timestamp": "2024-12-06T16:23:50.527Z"
+    "gasUsed": "252170",
+    "blockNumber": "2580",
+    "timestamp": "2024-12-09T17:14:16.110Z"
   },
   {
     "event": "NewPrice",
     "data": {
-      "instanceID": "4",
+      "instanceID": "3",
       "newPrice": "100",
       "requestCount": "1"
     },
-    "gasUsed": "203593",
-    "blockNumber": "18542",
-    "timestamp": "2024-12-06T16:24:06.174Z"
-  },
-  {
-    "event": "TaskCompleted",
-    "data": {
-      "instanceID": "4",
-      "taskName": "RestockRequest",
-      "sender": "retailer2",
-      "receiver": "manufacturer1",
-      "executionCount": 2
-    },
-    "gasUsed": "203593",
-    "blockNumber": "18542",
-    "timestamp": "2024-12-06T16:24:06.175Z"
-  },
-  {
-    "event": "TaskCompleted",
-    "data": {
-      "instanceID": "1",
-      "taskName": "ConfirmOrder",
-      "sender": "retailer1",
-      "receiver": "customer1",
-      "executionCount": 3
-    },
-    "gasUsed": "203593",
-    "blockNumber": "18542",
-    "timestamp": "2024-12-06T16:24:06.195Z"
+    "gasUsed": "262868",
+    "blockNumber": "2589",
+    "timestamp": "2024-12-09T17:14:25.086Z"
   },
   {
     "event": "TaskCompleted",
@@ -131,22 +105,11 @@
       "taskName": "ConfirmOrder",
       "sender": "retailer2",
       "receiver": "customer1",
-      "executionCount": 1
+      "executionCount": 3
     },
-    "gasUsed": "203593",
-    "blockNumber": "18542",
-    "timestamp": "2024-12-06T16:24:06.196Z"
-  },
-  {
-    "event": "NewPrice",
-    "data": {
-      "instanceID": "3",
-      "newPrice": "120",
-      "requestCount": "2"
-    },
-    "gasUsed": "203593",
-    "blockNumber": "18542",
-    "timestamp": "2024-12-06T16:24:06.200Z"
+    "gasUsed": "262868",
+    "blockNumber": "2589",
+    "timestamp": "2024-12-09T17:14:25.086Z"
   },
   {
     "event": "TaskCompleted",
@@ -155,11 +118,48 @@
       "taskName": "RestockRequest",
       "sender": "retailer1",
       "receiver": "manufacturer1",
+      "executionCount": 2
+    },
+    "gasUsed": "262868",
+    "blockNumber": "2589",
+    "timestamp": "2024-12-09T17:14:25.087Z"
+  },
+  {
+    "event": "TaskCompleted",
+    "data": {
+      "instanceID": "4",
+      "taskName": "RestockRequest",
+      "sender": "retailer2",
+      "receiver": "manufacturer1",
       "executionCount": 4
     },
-    "gasUsed": "203593",
-    "blockNumber": "18542",
-    "timestamp": "2024-12-06T16:24:06.200Z"
+    "gasUsed": "262868",
+    "blockNumber": "2589",
+    "timestamp": "2024-12-09T17:14:25.088Z"
+  },
+  {
+    "event": "NewPrice",
+    "data": {
+      "instanceID": "4",
+      "newPrice": "120",
+      "requestCount": "2"
+    },
+    "gasUsed": "262868",
+    "blockNumber": "2589",
+    "timestamp": "2024-12-09T17:14:25.088Z"
+  },
+  {
+    "event": "TaskCompleted",
+    "data": {
+      "instanceID": "1",
+      "taskName": "ConfirmOrder",
+      "sender": "retailer1",
+      "receiver": "customer1",
+      "executionCount": 1
+    },
+    "gasUsed": "262868",
+    "blockNumber": "2589",
+    "timestamp": "2024-12-09T17:14:25.089Z"
   },
   {
     "event": "TaskCompleted",
@@ -168,11 +168,11 @@
       "taskName": "CancelOrder",
       "sender": "customer2",
       "receiver": "retailer1",
-      "executionCount": 4
+      "executionCount": 2
     },
-    "gasUsed": "141025",
-    "blockNumber": "18557",
-    "timestamp": "2024-12-06T16:24:21.136Z"
+    "gasUsed": "200494",
+    "blockNumber": "2598",
+    "timestamp": "2024-12-09T17:14:34.178Z"
   },
   {
     "event": "TaskCompleted",
@@ -181,10 +181,10 @@
       "taskName": "CancelOrder",
       "sender": "customer2",
       "receiver": "retailer2",
-      "executionCount": 2
+      "executionCount": 4
     },
-    "gasUsed": "141025",
-    "blockNumber": "18557",
-    "timestamp": "2024-12-06T16:24:21.136Z"
+    "gasUsed": "200494",
+    "blockNumber": "2598",
+    "timestamp": "2024-12-09T17:14:34.190Z"
   }
 ]

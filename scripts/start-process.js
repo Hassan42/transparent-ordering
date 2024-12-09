@@ -271,6 +271,7 @@ async function executeTaskOC(instanceID, taskName, participant) {
                 // await makeDelay(500);
             } else {
                 // Task not open: revert
+                // console.error(error)
                 return;
             }
         }
@@ -549,48 +550,87 @@ async function listenForEvents() {
 
 async function orderingVotes() {
 
-    const pendingInteractions = await orderingContract.getPendingInteractions();
-    // Get the total domain count
-    const domainCount = await orderingContract.domain_count();
+    const indexBlock = await orderingContract.index_block();
+    console.log("Index blocks", indexBlock);
 
-    // Fetch all pending interactions
+    const inters = await orderingContract.getPendingInteractionsStruct();
+    console.log("interactions: ", inters)
 
-    // Array to hold the domains
-    const domains = [];
+    //Filter only valid orderer
+    const externalOrderers = await orderingContract.getExternalOrderersForEpoch(indexBlock);
 
-    console.log("domain count", domainCount)
-    // console.log("interactions", pendingInteractions)
-    // Loop through each domain to get their details
-    for (let i = 1; i <= domainCount; i++) {
-        const domain = await orderingContract.getDomainByIndex(i);
+    const validExternalOrderers = externalOrderers.filter(orderer => orderer.valid);
 
-        // Push the updated domain to the domains array
-        domains.push(domain);
-        console.log(domain);
+    if (validExternalOrderers.length != 0) {
+        const exCount = await orderingContract.getEpochextErnalOrderersCount(indexBlock);
+        console.log("External Orderers Voting", validExternalOrderers, exCount);
+        const pendingInteractions = await orderingContract.getPendingInteractions();
 
-        
-        // Populate the orderers array for the current domain
-        for (let j = 0; j < domain.orderers.length; j++) {
-            const ordererAddress = domain.orderers[j];
+        for (let i = 0; i < validExternalOrderers.length ; i++) {
 
-            // Fetch the pending interactions for the current orderer
-            const pendingInteractionsForOrderer = await orderingContract.getPendingInteractionsForOrderer(domain.id, ordererAddress);
-            // console.log(ordererAddress, pendingInteractionsForOrderer)
+            let indicesToReorder = shuffleArray(pendingInteractions); // TODO: different strategy to order
 
-            let indicesToReorder = shuffleArray(pendingInteractionsForOrderer); // TODO: different strategy to order
-
-            // Convert domain ID and indices if necessary
-            let domainId = Number(domain.id); // Or domain.domainId, if that's correct
             indicesToReorder = indicesToReorder.map(index => Number(index));
 
+            console.log(indicesToReorder)
 
-            if (domain.status != Number(0)) {
-                continue;
-            }
-            let tx = await orderingContract.orderInteraction(domainId, indicesToReorder);
+            // TODO: Check if epoch is not conflicted
+
+            let tx = await orderingContract.orderInteractionExternal(indicesToReorder);
 
             await tx.wait();
+        }
+    }
 
+    else {
+        console.log("Domains Orderers Voting");
+        // Get the total domain count
+        const domainCount = await orderingContract.domain_count();
+
+        // Fetch all pending interactions
+
+        // Array to hold the domains
+        const domains = [];
+
+        console.log("domain count", domainCount)
+
+
+        // console.log("interactions", pendingInteractions)
+        // Loop through each domain to get their details
+        for (let i = 1; i <= domainCount; i++) {
+            const domain = await orderingContract.getDomainByIndex(i);
+
+            // Push the updated domain to the domains array
+            domains.push(domain);
+            console.log(domain);
+
+
+            // Populate the orderers array for the current domain
+            for (let j = 0; j < domain.orderers.length; j++) {
+
+                if (domain.status != Number(0)) {
+                    continue;
+                }
+
+                const ordererAddress = domain.orderers[j];
+
+                // Fetch the pending interactions for the current orderer
+                const pendingInteractionsForOrderer = await orderingContract.getPendingInteractionsForOrderer(domain.id, ordererAddress);
+                console.log(ordererAddress, pendingInteractionsForOrderer)
+
+                let indicesToReorder = shuffleArray(pendingInteractionsForOrderer); // TODO: different strategy to order
+
+                // Convert domain ID and indices if necessary
+                let domainId = Number(domain.id); // Or domain.domainId, if that's correct
+                indicesToReorder = indicesToReorder.map(index => Number(index));
+
+
+
+                let tx = await orderingContract.orderInteraction(domainId, indicesToReorder);
+
+                await tx.wait();
+
+            }
         }
     }
 
