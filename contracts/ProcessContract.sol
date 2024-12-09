@@ -27,7 +27,8 @@ contract ProcessContract {
         );
         require(
             msg.sender == orderingContractAddress ||
-            instances[instanceID].taskParticipants[_activity].sender == msg.sender,
+                instances[instanceID].taskParticipants[_activity].sender ==
+                msg.sender,
             "Caller does not have the required role"
         );
         _;
@@ -180,8 +181,7 @@ contract ProcessContract {
     function executeTask(
         uint instanceID,
         string memory taskName
-    ) public isAccessible(instanceID, taskName)  {
-
+    ) public isAccessible(instanceID, taskName) {
         // Determine which task to execute
         if (compareStrings(taskName, "PurchaseOrder")) {
             PurchaseOrder(instanceID);
@@ -226,14 +226,18 @@ contract ProcessContract {
     function calculatePrice() internal view returns (uint256) {
         uint256 priceIncrease = 0;
         if (globalData.requestCount > 1) {
-            priceIncrease = (globalData.basePrice *
-                globalData.demandFactor *
-                globalData.requestCount) / (100 * SCALING_FACTOR); // Scale down by the scaling factor
+            priceIncrease =
+                (globalData.basePrice *
+                    globalData.demandFactor *
+                    globalData.requestCount) /
+                (100 * SCALING_FACTOR); // Scale down by the scaling factor
         }
         return globalData.basePrice + priceIncrease; // Return total price
     }
 
-    function setOrderingContractAddress(address _orderingContractAddress) public {
+    function setOrderingContractAddress(
+        address _orderingContractAddress
+    ) public {
         orderingContractAddress = _orderingContractAddress;
     }
 
@@ -287,5 +291,47 @@ contract ProcessContract {
         TaskParticipants memory participants = instances[instanceID]
             .taskParticipants[taskName];
         return (participants.sender, participants.receiver);
+    }
+
+    function getParticipants(
+        uint instanceID
+    ) public view returns (address[] memory) {
+        address[] memory participants;
+
+        // Retrieve the participants for the instance
+        participants[0] = instances[instanceID].participants[Role.Customer];
+        participants[1] = instances[instanceID].participants[Role.Retailer];
+        participants[2] = instances[instanceID].participants[Role.Manufacturer];
+
+        return participants;
+    }
+
+    function getAllParticipants() public view returns (address[] memory) {
+        // Use a temporary dynamic array to collect participants
+        address[] memory tempParticipants = new address[](instancesCount * 3);
+        uint count = 0;
+
+        // Iterate through all instances
+        for (uint i = 1; i <= instancesCount; i++) {
+            address customer = instances[i].participants[Role.Customer];
+            address retailer = instances[i].participants[Role.Retailer];
+            address manufacturer = instances[i].participants[Role.Manufacturer];
+
+            // Add participants to the array
+            tempParticipants[count] = customer;
+            count++;
+            tempParticipants[count] = retailer;
+            count++;
+            tempParticipants[count] = manufacturer;
+            count++;
+        }
+
+        // Create a new array of the exact size
+        address[] memory allParticipants = new address[](count);
+        for (uint j = 0; j < count; j++) {
+            allParticipants[j] = tempParticipants[j];
+        }
+
+        return allParticipants;
     }
 }

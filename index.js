@@ -203,7 +203,10 @@ app.post('/create-network', (req, res) => {
                         ipv4_address: `172.16.239.${10 + i}`
                     }
                 },
-                entrypoint: '/data/start-node.sh'
+                entrypoint: [
+                    '/bin/sh', '-c', 
+                    'chmod +x /data/start-node.sh && /data/start-node.sh'
+                ]
             };
         }
 
@@ -267,7 +270,10 @@ app.post('/create-network', (req, res) => {
                     ipv4_address: '172.16.239.20'
                 }
             },
-            entrypoint: '/data/start-node.sh'
+            entrypoint: [
+                '/bin/sh', '-c', 
+                'chmod +x /data/start-node.sh && /data/start-node.sh'
+            ]
         };
 
 

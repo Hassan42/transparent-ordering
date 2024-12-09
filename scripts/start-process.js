@@ -45,7 +45,7 @@ const ROUND_DELAY = 1000;
 let global_execution_count = 0;
 
 // Rounds 
-const rounds = 2;
+const rounds = 1;
 
 async function main() {
 
@@ -559,15 +559,14 @@ async function orderingVotes() {
     const domains = [];
 
     console.log("domain count", domainCount)
-    console.log("interactions", pendingInteractions)
+    // console.log("interactions", pendingInteractions)
     // Loop through each domain to get their details
     for (let i = 1; i <= domainCount; i++) {
         const domain = await orderingContract.getDomainByIndex(i);
 
         // Push the updated domain to the domains array
         domains.push(domain);
-
-        console.log(domains);
+        console.log(domain);
 
         
         // Populate the orderers array for the current domain
@@ -576,6 +575,7 @@ async function orderingVotes() {
 
             // Fetch the pending interactions for the current orderer
             const pendingInteractionsForOrderer = await orderingContract.getPendingInteractionsForOrderer(domain.id, ordererAddress);
+            // console.log(ordererAddress, pendingInteractionsForOrderer)
 
             let indicesToReorder = shuffleArray(pendingInteractionsForOrderer); // TODO: different strategy to order
 
@@ -583,7 +583,6 @@ async function orderingVotes() {
             let domainId = Number(domain.id); // Or domain.domainId, if that's correct
             indicesToReorder = indicesToReorder.map(index => Number(index));
 
-            console.log(ordererAddress, domainId, pendingInteractionsForOrderer)
 
             if (domain.status != Number(0)) {
                 continue;
@@ -594,6 +593,8 @@ async function orderingVotes() {
 
         }
     }
+
+    // console.log(domains);
 
     // Check for the next ordering phase
     checkAndEmitCanVoteEvent();

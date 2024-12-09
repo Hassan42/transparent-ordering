@@ -31,7 +31,6 @@ contract OrderingContract {
         uint vote_count;
         uint[] ordered_interactions;
         uint orderers_count;
-        mapping(address => uint[]) ordererToPendingInteractions; // TODO: move it to orderer
     }
 
     enum DomainStatus {
@@ -46,6 +45,7 @@ contract OrderingContract {
 
     // Mapping to store domains instead of an array, index 0 is preserved for domainless interactions
     mapping(uint => Domain) public domains;
+
 
     event Conflict(uint indexed domain);
     event InteractionPoolOpen();
@@ -116,11 +116,29 @@ contract OrderingContract {
         uint domainId,
         address orderer
     ) external view returns (uint[] memory) {
-        // Retrieve the list of pending interaction IDs for the given orderer
-        uint[] memory pendingInteractionIds = domains[domainId]
-            .ordererToPendingInteractions[orderer];
+        // Create a temporary array to store indices of matching interactions
+        uint[] memory tempIndices = new uint[](pending_interactions.length);
 
-        return pendingInteractionIds;
+        uint count = 0;
+
+        for (uint i = 0; i < pending_interactions.length; i++) {
+            uint interactionDomain = pending_interactions[i].domain;
+
+            // Check if the domain matches and if the orderer matches
+            if (interactionDomain == domainId && matchParticipant(orderer, i)) {
+                tempIndices[count] = i; // Store the index of the matching interaction
+                count++;
+            }
+        }
+
+        // Create an array with the exact size for the matching indices
+        uint[] memory matchingIndices = new uint[](count);
+
+        for (uint j = 0; j < count; j++) {
+            matchingIndices[j] = tempIndices[j];
+        }
+
+        return matchingIndices;
     }
 
     // Function to submit an interaction for ordering
@@ -151,7 +169,8 @@ contract OrderingContract {
         );
 
         updateDomains();
-        updateOrderers();
+        // updateOrderers();
+        updateOrderersAll();
     }
 
     function addOrderer(uint _domainId, address _ordererAddress) public {
@@ -173,16 +192,35 @@ contract OrderingContract {
         emit OrdererAdded(_domainId, ordererId, _ordererAddress);
     }
 
-    function updateOrderers() internal {
+    function updateOrderersExternal() internal {
+        // Update the external list, if empty fallback to all orderers or intermediate. 
+           
+    }
+
+    function updateOrderersAll() internal {
         // Get the last interaction in the list
         uint i = pending_interactions.length - 1;
         address sender = pending_interactions[i].sender;
         address receiver = pending_interactions[i].receiver;
         uint domainID = pending_interactions[i].domain;
 
-        // Boolean falgs to add the current interaction to the list of the orderer (to avoid duplication)
-        bool senderMatched = false;
-        bool receiverMatched = false;
+        // Add sender to the orderer list if not already added
+        if (!isOrderer(domainID, sender)) {
+            addOrderer(domainID, sender);
+        }
+
+        // Add receiver to the orderer list if not already added
+        if (!isOrderer(domainID, receiver)) {
+            addOrderer(domainID, receiver);
+        }
+    }
+
+    function updateOrderers() internal {
+        // Get the last interaction in the list
+        uint i = pending_interactions.length - 1;
+        address sender = pending_interactions[i].sender;
+        address receiver = pending_interactions[i].receiver;
+        uint domainID = pending_interactions[i].domain;
 
         for (uint j = 0; j < pending_interactions.length; j++) {
             if (i != j) {
@@ -191,16 +229,6 @@ contract OrderingContract {
                     if (!isOrderer(domainID, sender)) {
                         addOrderer(domainID, sender);
                     }
-                    domains[domainID].ordererToPendingInteractions[sender].push(
-                            j
-                        );
-                    if (!senderMatched) {
-                        domains[domainID]
-                            .ordererToPendingInteractions[sender]
-                            .push(i);
-                        senderMatched = true;
-                    }
-
                     continue;
                 }
 
@@ -209,23 +237,11 @@ contract OrderingContract {
                     if (!isOrderer(domainID, receiver)) {
                         addOrderer(domainID, receiver);
                     }
-                    domains[domainID]
-                        .ordererToPendingInteractions[receiver]
-                        .push(j);
-
-                    if (!receiverMatched) {
-                        domains[domainID]
-                            .ordererToPendingInteractions[receiver]
-                            .push(i);
-                        receiverMatched = true;
-                    }
-
                     continue;
                 }
             }
         }
     }
-
 
     // Helper function to check if the participant matches another interaction's sender or receiver
     function matchParticipant(
@@ -263,9 +279,12 @@ contract OrderingContract {
             "Need at least two indices to reorder"
         );
 
-        // require(isOrderer(domainId, msg.sender));
-        require(domains[domainId].status == DomainStatus.Pending);
-        //TODO: check if the interaction are within the list of the orderer
+        // require(isOrderer(domainId, msg.sender), "Sender is not an orderer"); (dev)
+
+        require(
+            domains[domainId].status == DomainStatus.Pending,
+            "Domain is not pending"
+        );
 
         Domain storage domain = domains[domainId];
         bool[] memory reorderedFlags = new bool[](pending_interactions.length);
@@ -281,6 +300,13 @@ contract OrderingContract {
                 !reorderedFlags[index],
                 "Duplicate interaction ID in the order"
             );
+
+            // check if the interaction are within the list of the orderer (dev)
+            // require(
+            //     matchParticipant(msg.sender, index),
+            //     "Not allowed to order this interaction"
+            // );
+
             reorderedFlags[index] = true;
         }
 
@@ -430,20 +456,6 @@ contract OrderingContract {
                     ] = domainToMerge.orderers[ordererId];
                 }
 
-                // Transfer `ordererToPendingInteractions` mappings to the primary domain.
-                for (uint i = 0; i < domainToMerge.orderers_count; i++) {
-                    address ordererAddress = domainToMerge
-                        .orderers[i]
-                        .ordererAddress;
-                    uint[] memory interactions = domainToMerge
-                        .ordererToPendingInteractions[ordererAddress];
-                    for (uint j = 0; j < interactions.length; j++) {
-                        primaryDomain
-                            .ordererToPendingInteractions[ordererAddress]
-                            .push(interactions[j]);
-                    }
-                }
-
                 // Mark the merged domain as "Merged".
                 domainToMerge.status = DomainStatus.Merged;
             }
@@ -509,7 +521,10 @@ contract OrderingContract {
     // Internal function to execute interactions and reset contract data
     function executeInteractions() internal {
         for (uint i = 1; i <= domain_count; i++) {
-            if (domains[i].status == DomainStatus.Conflict || domains[i].status == DomainStatus.Executed) {
+            if (
+                domains[i].status == DomainStatus.Conflict ||
+                domains[i].status == DomainStatus.Executed
+            ) {
                 continue;
             }
             executeDomain(i);

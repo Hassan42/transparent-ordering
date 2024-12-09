@@ -80,4 +80,8 @@ interface IProcessContract {
         uint instanceID,
         string memory taskName
     ) external view returns (address sender, address receiver);
+
+    function getParticipants(
+        uint instanceID
+    ) external view returns (address[] memory);
 }
