@@ -18,7 +18,8 @@
     "fs": "^0.0.1-security",
     "fs-extra": "^11.2.0",
     "js-yaml": "^4.1.0",
-    "path": "^0.12.7"
+    "path": "^0.12.7",
+    "winston": "^3.17.0"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-chai-matchers": "^2.0.8",

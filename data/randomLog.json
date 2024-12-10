@@ -2,6 +2,13 @@
   {
     "instances": [
       {
+        "instanceID": 3,
+        "deferredChoice": [
+          1,
+          0
+        ]
+      },
+      {
         "instanceID": 2,
         "deferredChoice": [
           0,
@@ -17,13 +24,6 @@
       },
       {
         "instanceID": 1,
-        "deferredChoice": [
-          0,
-          1
-        ]
-      },
-      {
-        "instanceID": 3,
         "deferredChoice": [
           1,
           0
