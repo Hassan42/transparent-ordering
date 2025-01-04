@@ -64,8 +64,8 @@ contract ProcessContract {
 
     // Constructor
     constructor() {
-        globalData.basePrice = 1 * SCALING_FACTOR;
-        globalData.demandFactor = 10 * SCALING_FACTOR;
+        globalData.basePrice = 100;
+        globalData.demandFactor = 100;
     }
 
     // Instance Management
@@ -164,6 +164,7 @@ contract ProcessContract {
         instances[instanceID].state["RestockRequest"] = State.Completed;
 
         emit NewPrice(instanceID, newPrice, globalData.requestCount);
+
     }
 
     function ConfirmRestock(uint instanceID) public {
@@ -225,13 +226,16 @@ contract ProcessContract {
 
     function calculatePrice() internal view returns (uint256) {
         uint256 priceIncrease = 0;
+        
         if (globalData.requestCount > 1) {
-            priceIncrease =
-                (globalData.basePrice *
-                    globalData.demandFactor *
-                    globalData.requestCount) /
-                (100 * SCALING_FACTOR); // Scale down by the scaling factor
+            // priceIncrease = globalData.demandFactor;
+            //     (globalData.basePrice *
+            //         globalData.demandFactor *
+            //         globalData.requestCount) /
+            //     (100 * SCALING_FACTOR); // Scale down by the scaling factor
+            priceIncrease = globalData.demandFactor;
         }
+        
         return globalData.basePrice + priceIncrease; // Return total price
     }
 

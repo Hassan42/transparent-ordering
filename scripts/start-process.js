@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const cliProgress = require('cli-progress');
 const EventEmitter = require("events");
+const seedrandom = require('seedrandom');
 
 const dataDir = path.join(__dirname, '..', 'data'); // Define your data directory
 
@@ -40,26 +41,56 @@ const nonceMap = new Map();
 const logs = [];
 
 // Delays between ech round
-const ROUND_DELAY = 1000;
+const ROUND_DELAY = 1500;
 
 let global_execution_count = 0;
 
 // Rounds 
-const rounds = 1;
+let rounds;
+
+let strategy;
+
+let logging = true;
+
+let setting;
+
+let conflictCheckProbability = 90;
+
+let round = 0;
+
+const domains = [];
+const externalOrderer = []; //for logging
 
 async function main() {
 
     const randomLogArg = process.env.RANDOM_LOG_PATH; // Get randomLog from command-line arguments if provided
+    strategy = process.env.STRATEGY;
+    rounds = process.env.ROUNDS;
+    logging = process.env.LOGGING;
+    setting = process.env.SETTING;
+
+    if (!strategy) {
+        strategy = 0; // Intermediate by default
+    }
+
+    if (!rounds) {
+        rounds = 1;
+    }
+
+    if (!setting) {
+        setting = "PLAIN";
+    }
 
     // Retrieve participants and validate against process instances
     const participants = await getParticipantsAndValidate();
     if (!participants) return;
 
-    console.log(participants)
+    Logger.log(participants)
 
     await deployContracts();
 
-    checkAndEmitCanVoteEvent();
+    if (setting == "OC") { 
+        checkAndEmitCanVoteEvent(); }
 
     listenForEvents();
 
@@ -88,7 +119,7 @@ async function setupRandomLog(randomLogArg, instanceCount) {
             process.exit(1);
         }
     } else {
-        console.log("Generating new log...");
+        Logger.log("Generating new log...");
         randomLog = generateRandomLog(instanceCount, rounds);
         writeJsonToFile(dataDir, 'randomLog', randomLog);
     }
@@ -96,7 +127,7 @@ async function setupRandomLog(randomLogArg, instanceCount) {
 }
 
 async function executeProcessInstances(randomLog) {
-    console.log("Starting process instances...");
+    Logger.log("Starting process instances...");
     const progressBar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     progressBar.start(randomLog.length, 0);
 
@@ -113,18 +144,24 @@ async function executeProcessInstances(randomLog) {
         }));
 
         await resetState();
+        saveResults();
+
         progressBar.update(i + 1);
 
         if (delay) await makeDelay(ROUND_DELAY);
+
+        round+=1;
     }
 
     progressBar.stop();
-    console.log("All instances have been executed successfully.");
+    Logger.log("All instances have been executed successfully.");
 }
 
 function saveResults() {
     writeJsonToFile(dataDir, "logs", logs);
     saveDiscoLog(dataDir, "discoLog");
+    writeJsonToFile(dataDir, "domains", domains);
+    writeJsonToFile(dataDir, "externalOrderers", externalOrderer);
 }
 
 async function executeInstance(instance, deferredChoice) {
@@ -146,6 +183,11 @@ async function executeInstance(instance, deferredChoice) {
 
     let openTasks = await fetchProcessState(instance.instanceID);
 
+    let executeTaskFunction = executeTask;
+    if (setting == "OC") {
+        executeTaskFunction = executeTaskOC;
+    }
+
     // Process tasks until no more open tasks are left
     while (openTasks.length !== 0) {
         // If there's only one open task, execute it with the designated participant
@@ -153,7 +195,7 @@ async function executeInstance(instance, deferredChoice) {
             const task = openTasks[0];
             const participantRole = taskSenderMap[task];
             const participant = participants[participantRole];
-            await executeTaskOC(instance.instanceID, task, participant);
+            await executeTaskFunction(instance.instanceID, task, participant);
         } else {
             // Use deferredChoice to decide between ConfirmRestock or CancelOrder
             const choices = [];
@@ -161,7 +203,7 @@ async function executeInstance(instance, deferredChoice) {
                 const task = choice === 1 ? "ConfirmRestock" : "CancelOrder";
                 const participantRole = taskSenderMap[task];
                 const participant = participants[participantRole];
-                choices.push(executeTaskOC(instance.instanceID, task, participant));
+                choices.push(executeTaskFunction(instance.instanceID, task, participant));
             }
             // Wait for both choices to be resolved;
             await Promise.all(choices);
@@ -250,11 +292,11 @@ async function executeTaskOC(instanceID, taskName, participant) {
 
             // Update nonce map to next expected nonce after successful transaction
             nonceMap.set(participant.publicKey, currentNonce);
-            // console.log(instanceID, taskName, "end epoch")
+            Logger.log(`${instanceID} , ${taskName}, start epoch`)
             // Wait for the InteractionPoolOpen event before returning
             await new Promise((resolve) => {
                 orderingContract.once("InteractionPoolOpen", () => {
-                    // console.log(instanceID, taskName, "next epoch")
+                    Logger.log(`${instanceID} , ${taskName}, end epoch`)
                     resolve();
                 });
             });
@@ -299,12 +341,14 @@ async function checkAndEmitCanVoteEvent() {
 
             if (canVote) {
                 // Emit the "canVoteEvent" with some data
-                eventEmitter.emit("canVoteEvent", { message: "canVote is true!" });
-                break; // Stop the loop after emitting the event
+                eventEmitter.emit("canVoteEvent");
+                return; // Stop the loop after emitting the event
             }
+
+            await makeDelay(300);
         } catch (error) {
             console.error("Error checking canVote:", error);
-            break; // Stop the loop on error to avoid infinite retries
+            // break; // Stop the loop on error to avoid infinite retries
         }
     }
 }
@@ -360,15 +404,20 @@ function getProcessInstancesPath() {
 
 // Deploy ProcessContract and OrderingContract
 async function deployContracts() {
-    console.log("Deploying contracts...");
+    Logger.log("Deploying contracts...");
     try {
+
         const ProcessContract = await ethers.getContractFactory("ProcessContract");
         processContract = await ProcessContract.deploy();
-        console.log(`ProcessContract deployed at: ${processContract.target}`);
+        Logger.log(`ProcessContract deployed at: ${processContract.target}`);
 
+        try{
         const OrderingContract = await ethers.getContractFactory("OrderingContract");
-        orderingContract = await OrderingContract.deploy(processContract.target);
-        console.log(`OrderingContract deployed at: ${orderingContract.target}`);
+        orderingContract = await OrderingContract.deploy(processContract.target, strategy);
+        Logger.log(`OrderingContract deployed at: ${orderingContract.target}`);}
+        catch(error){
+            console.log(error);
+        }
 
         await makeDelay(8000); // ethers will crash if we dont wait some time for the contract to be confirmed (unable to call view functions) (??)
 
@@ -432,11 +481,15 @@ async function createProcessInstances(participants) {
                 participants: participantRoles
             });
 
-            // console.log(`Instance ${instanceID} with participants:`, participantRoles);
+
+
+            console.log(`Instance ${instanceID} with participants:`, participantRoles);
         } else {
             console.error(`Could not create instance for: ${instance}`);
         }
     }
+
+
 
     return instanceDetails;
 }
@@ -489,6 +542,23 @@ function shuffleArray(array) {
     return newArray;
 }
 
+
+function enhancedshuffleArray(array, seed, passes = 3) {
+    let rng = seedrandom(seed); // Initialize a seeded random generator
+    let shuffled = [...array];
+
+    for (let pass = 0; pass < passes; pass++) {
+        for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(rng() * (i + 1));
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        // Re-seed with a new seed for the next pass to add entropy
+        rng = seedrandom(seed + pass.toString() + Math.random().toString());
+    }
+
+    return shuffled;
+}
+
 async function listenForEvents() {
     // Listen for InstanceCreated event
     processContract.on("InstanceCreated", async (instanceID, event) => {
@@ -499,18 +569,25 @@ async function listenForEvents() {
 
     // Listen for NewPrice event
     processContract.on("NewPrice", async (instanceID, newPrice, requestCount, event) => {
-        const transactionHash = event.log.transactionHash
+        const transactionHash = event.log.transactionHash;
+        const instance = instancesDetails.find(inst => inst.instanceID === Number(instanceID));
         const eventData = {
             instanceID: instanceID.toString(),
             newPrice: newPrice.toString(),
-            requestCount: requestCount.toString()
+            requestCount: requestCount.toString(),
+            executionCount: instance.execution_count
         };
         await logEvent("NewPrice", eventData, transactionHash);
     });
 
     // Listen for NewPrice event
-    orderingContract.on("Conflict", async (domainId) => {
-        console.log("conflict detected in domain in ", domainId);
+    orderingContract.on("Conflict", async (domainId, event) => {
+        const transactionHash = event.log.transactionHash;
+        const eventData = {
+            instanceID: domainId.toString(),
+        };
+        await logEvent("Conflict", eventData, transactionHash);
+        Logger.log(`conflict detected in domain in ${domainId}`);
     });
 
     // Listen for TaskCompleted event
@@ -528,6 +605,21 @@ async function listenForEvents() {
             instance.execution_count = 1 + global_execution_count++;
         }
 
+        //Increase confirm order
+        if (taskName == "ConfirmOrder"){
+            // instanceCounts[instanceID.toString()] = (instanceCounts[instanceID.toString()] || 0) + 1;
+        }
+
+        if (taskName == "CancelOrder"){
+            if(instanceID.toString() == 1 || instanceID.toString() == 2){
+            cancelConfirmCounts["CancelOrder"]++;}
+        }
+
+        if (taskName == "ConfirmRestock"){
+            if(instanceID.toString() == 1 || instanceID.toString() == 2){
+                cancelConfirmCounts["ConfirmRestock"]++;}
+        }
+        
         const eventData = {
             instanceID: instanceID.toString(),
             taskName: taskName,
@@ -540,119 +632,390 @@ async function listenForEvents() {
 
     // Local event to know when to vote
     eventEmitter.on("canVoteEvent", async (data) => {
-        console.log("canVoteEvent triggered:", data.message);
+        // await makeDelay(9000);
         await orderingVotes();
     });
 
     // Keep the script running to listen for events
-    console.log("Listening for events...");
+    Logger.log("Listening for events...");
 }
 
 async function orderingVotes() {
-
-    const domains = [];
     const indexBlock = await orderingContract.index_block();
-    console.log("Index blocks", indexBlock);
-    
+    Logger.log(`Index blocks ${indexBlock}`);
+
     const domainCount = await orderingContract.domain_count();
+    const conflictAllowed = Math.random() * 100 >= conflictCheckProbability;
+
+    // const interactions = await orderingContract.getPendingInteractionsStruct();
+
+    if (domainCount === 0) {
+        try {
+            await orderingContract.release();
+            checkAndEmitCanVoteEvent();
+            return;
+        } catch (error) {
+            Logger.error("Failed to release isolated interactions.", error);
+        }
+    }
 
     for (let i = 1; i <= domainCount; i++) {
         const domain = await orderingContract.getDomainByIndex(i);
-
-        // Push the updated domain to the domains array
         domains.push(domain);
-        console.log(domain);
+        // Logger.log(domain);
     }
 
-    if (domainCount == 0){
-        console.log("Releasing isolated interactions.")
-        try{
-            await orderingContract.release();
-        }
-        catch(error){
-            console.error("Failed to release.")
-        }
-    }
-
-    // const inters = await orderingContract.getPendingInteractionsStruct();
-    // console.log("interactions: ", inters)
-
-    //Filter only valid orderer
     const externalOrderers = await orderingContract.getExternalOrderersForEpoch(indexBlock);
-
     const validExternalOrderers = externalOrderers.filter(orderer => orderer.valid);
 
-    if (validExternalOrderers.length != 0) {
-       
-        console.log("External Orderers Voting");
-        const pendingInteractions = await orderingContract.getPendingInteractions();
+    if (validExternalOrderers.length !== 0) {
+        Logger.log("External Orderers Voting");
+        externalOrderer.push(validExternalOrderers);
 
-        for (let i = 0; i < validExternalOrderers.length ; i++) {
+        const pendingInteractionsStruct = await orderingContract.getPendingInteractionsStruct();
+        console.log("INTERS:", pendingInteractionsStruct);
 
-            let indicesToReorder = shuffleArray(pendingInteractions); // TODO: different strategy to order
+        await handleVoting(
+            validExternalOrderers,
+            () => orderingContract.getPendingInteractions(),
+            (order) => orderingContract.orderInteractionExternal(order),
+            conflictAllowed,
+            "External"
+        );
 
-            indicesToReorder = indicesToReorder.map(index => Number(index));
-
-            console.log(validExternalOrderers[i][0], indicesToReorder)
-
-            // TODO: Check if epoch is not conflicted
-
-            let tx = await orderingContract.orderInteractionExternal(indicesToReorder);
-
-            await tx.wait();
-        }
-    }
-
-    else {
-        console.log("Domains Orderers Voting");
-        // Get the total domain count
-
-        // Fetch all pending interactions
-
-        // Array to hold the domains
-
-        console.log("domain count", domainCount)
-
-
-        // console.log("interactions", pendingInteractions)
-        // Loop through each domain to get their details
+    } else {
+        Logger.log("Domains Orderers Voting");
         for (let i = 1; i <= domainCount; i++) {
             const domain = await orderingContract.getDomainByIndex(i);
 
-            // Push the updated domain to the domains array
-    
+            if (domain.status != Number(0)) {
+                continue;
+            }
 
-            // Populate the orderers array for the current domain
-            for (let j = 0; j < domain.orderers.length; j++) {
+            console.log("DOMAIN:", domain);
+            const pendingInteractionsStruct = await orderingContract.getPendingInteractionsStruct();
+            console.log("INTERS:", pendingInteractionsStruct);
 
-                if (domain.status != Number(0)) {
-                    continue;
+            await handleVoting(
+                domain.orderers,
+                (orderer) => orderingContract.getPendingInteractionsForOrderer(domain.id, orderer),
+                (order) => orderingContract.orderInteraction(domain.id, order),
+                conflictAllowed,
+                `Domain ${i}`
+            );
+        }
+    }
+
+    checkAndEmitCanVoteEvent();
+}
+
+/**
+ * Handles the voting process for a set of orderers, including conflict resolution.
+ * 
+ * @param {Array} orderers - The orderers participating in the voting.
+ * @param {Function} getInteractions - A function to fetch pending interactions for an orderer.
+ * @param {Function} submitOrder - A function to submit the resolved order for an orderer.
+ * @param {Boolean} conflictAllowed - Whether conflicts are allowed.
+ * @param {String} context - A label to identify the voting context in logs.
+ */
+async function handleVoting(orderers, getInteractions, submitOrder, conflictAllowed, context) {
+    const shuffledOrderers = shuffleArray(orderers);
+    let currentOrder = [];
+
+    // Build the initial order
+    for (const orderer of shuffledOrderers) {
+        const pendingInteractions = await getInteractions(orderer);
+        currentOrder.push([...pendingInteractions]); // Add subarray for each orderer
+    }
+
+    currentOrder = shuffleArray(currentOrder);
+
+    // Apply round-robin bias
+    currentOrder = await applyRoundRobinBias(currentOrder);
+
+    Logger.log(`${context} Current Order:`, currentOrder);
+
+    // Handle conflict detection and resolution
+    if (!conflictAllowed) {
+        let conflictDetected = checkConflict(currentOrder);
+
+        if (conflictDetected) {
+            Logger.log(`Conflict detected in ${context}, attempting to resolve...`);
+
+            while (conflictDetected) {
+                // Shuffle the orderers and rebuild the newOrder based on the new orderer arrangement
+                const reshuffledOrderers = shuffleArray(shuffledOrderers);
+                let reshuffledOrder = [];
+
+                for (const orderer of reshuffledOrderers) {
+                    const pendingInteractions = await getInteractions(orderer);
+                    reshuffledOrder.push([...pendingInteractions]); // Add subarray for each orderer
                 }
 
-                const ordererAddress = domain.orderers[j];
+                // Shuffle each subarray in the reshuffled order
+                for (let i = 0; i < reshuffledOrder.length; i++) {
+                    reshuffledOrder[i] = shuffleArray([...reshuffledOrder[i]]);
+                }
 
-                // Fetch the pending interactions for the current orderer
-                const pendingInteractionsForOrderer = await orderingContract.getPendingInteractionsForOrderer(domain.id, ordererAddress);
-                
+                reshuffledOrder = await applyRoundRobinBias(reshuffledOrder);
 
-                let indicesToReorder = shuffleArray(pendingInteractionsForOrderer); // TODO: different strategy to order
-       
-                // Convert domain ID and indices if necessary
-                let domainId = Number(domain.id); // Or domain.domainId, if that's correct
-                indicesToReorder = indicesToReorder.map(index => Number(index));
-                console.log(ordererAddress, indicesToReorder)
+                // Check for conflicts in the reshuffled order
+                conflictDetected = checkConflict(reshuffledOrder);
 
+                Logger.log(`Rechecking conflict for ${context}: [${reshuffledOrder}]`);
 
-                let tx = await orderingContract.orderInteraction(domainId, indicesToReorder);
-
-                await tx.wait();
-
+                // Update shuffledOrderers and currentOrder if no conflict
+                if (!conflictDetected) {
+                    Logger.log(`Conflict resolved for ${context}.`);
+                    shuffledOrderers.splice(0, shuffledOrderers.length, ...reshuffledOrderers);
+                    currentOrder.splice(0, currentOrder.length, ...reshuffledOrder);
+                }
             }
         }
     }
 
-    // Check for the next ordering phase
-    checkAndEmitCanVoteEvent();
+    // Submit the orders
+    for (let i = 0; i < shuffledOrderers.length; i++) {
+        const orderer = shuffledOrderers[i];
+        const order = currentOrder[i];
+
+        Logger.log(`${context} Orderer ${orderer} submitting order: ${order}`);
+
+        try {
+            const tx = await submitOrder(order);
+            await tx.wait();
+        } catch (error) {
+            Logger.log(`${context} Orderer ${orderer} failed to submit order.`);
+        }
+    }
+
+}
+
+/**
+ * Applies round-robin bias to the global order based on the current round.
+ * 
+ * @param {Array<Array<number>>} globalOrder - The global order of interactions as an array of subarrays.
+ * @param {Array<Object>} pendingInteractionsStruct - The structure containing interaction details.
+ * @param {number} currentRound - The current round (0 for bias to 3,4 and 1 for bias to 1,2).
+ * @returns {Array<Array<number>>} - The updated global order with bias applied.
+ */
+// Initialize counters for CancelOrder and ConfirmRestock
+// Initialize combined counters for CancelOrder and ConfirmRestock
+let cancelConfirmCounts = { "CancelOrder": 0, "ConfirmRestock": 0 };
+
+async function applyRoundRobinBias(globalOrder) {
+    Logger.log("Applying round-robin bias.");
+
+    const pendingInteractionsStruct = await orderingContract.getPendingInteractionsStruct();
+
+    globalOrder.forEach((subOrderer, subOrderIndex) => {
+        const biasedInteractions = [];
+        const otherInteractions = [];
+
+        subOrderer.forEach(index => {
+            const interaction = pendingInteractionsStruct[index];
+            const instanceID = BigInt(interaction.instanceID || interaction[0]);
+            const interactionName = interaction.name || interaction[3];
+
+            // PurchaseOrder Bias (Round-Based)
+            if (interactionName === "PurchaseOrder") {
+                if (Math.floor(round / 5) % 2 === 0) {
+                    // Bias towards instanceID 3 and 4 for even rounds
+                    if (instanceID === 3n || instanceID === 4n) {
+                        Logger.log(`Biasing PurchaseOrder for instance 3 or 4: ${index}`);
+                        biasedInteractions.push(index);
+                    } else {
+                        otherInteractions.push(index);
+                    }
+                } else {
+                    // Bias towards instanceID 1 and 2 for odd rounds
+                    if (instanceID === 1n || instanceID === 2n) {
+                        Logger.log(`Biasing PurchaseOrder for instance 1 or 2: ${index}`);
+                        biasedInteractions.push(index);
+                    } else {
+                        otherInteractions.push(index);
+                    }
+                }
+            }
+
+            // RestockRequest Bias (Round-Based)
+            else if (interactionName === "RestockRequest") {
+                if (Math.floor(round / 5) % 2 === 0) {
+                    // Bias towards instanceID 1 and 3 for even rounds
+                    if (instanceID === 1n || instanceID === 3n) {
+                        Logger.log(`Biasing RestockRequest for instance 1 or 3: ${index}`);
+                        biasedInteractions.push(index);
+                    } else {
+                        otherInteractions.push(index);
+                    }
+                } else {
+                    // Bias towards instanceID 2 and 4 for odd rounds
+                    if (instanceID === 2n || instanceID === 4n) {
+                        Logger.log(`Biasing RestockRequest for instance 2 or 4: ${index}`);
+                        biasedInteractions.push(index);
+                    } else {
+                        otherInteractions.push(index);
+                    }
+                }
+            }
+
+            // CancelOrder and ConfirmRestock Balancing
+            else if (interactionName === "CancelOrder" || interactionName === "ConfirmRestock") {
+                if (instanceID === 1n || instanceID === 2n) {
+                    // Determine the task with the lowest count
+                    const taskToBias = cancelConfirmCounts["CancelOrder"] <= cancelConfirmCounts["ConfirmRestock"]
+                        ? "CancelOrder"
+                        : "ConfirmRestock";
+
+                    console.log(cancelConfirmCounts);
+
+                    if (interactionName === taskToBias) {
+                        Logger.log(`Balancing task ${interactionName} for instance ${instanceID}: ${index}`);
+                        biasedInteractions.push(index);
+                        // cancelConfirmCounts[interactionName]++; // Increment the task count
+                    } else {
+                        otherInteractions.push(index);
+                    }
+                } else {
+                    otherInteractions.push(index);
+                }
+            }
+
+            // Default: Other interactions
+            else {
+                otherInteractions.push(index);
+            }
+        });
+
+        // Update the specific subOrderer in the globalOrder
+        globalOrder[subOrderIndex] = [...biasedInteractions, ...otherInteractions];
+    });
+
+    return globalOrder;
+}
+
+
+
+
+
+// let instanceCounts = { "1": 0, "2": 0, "3": 0, "4": 0 }; // Track counts for each instance
+// let leadingInstance = null; // Instance currently leading
+// let convergenceActive = false;
+
+// async function applyRoundRobinBias(globalOrder, maxRounds=500) {
+//     console.log("Instance counts:", instanceCounts);
+//     Logger.log(`Applying bias for round ${round}.`);
+
+//     const pendingInteractionsStruct = await orderingContract.getPendingInteractionsStruct();
+
+//     // Sort instances by interaction counts
+//     const sortedInstances = Object.entries(instanceCounts)
+//         .sort(([, countA], [, countB]) => countA - countB)
+//         .map(([instance]) => instance);
+
+//     // Check if convergence should be triggered
+//     const triggerConvergence = 
+//         !convergenceActive &&
+//         (Math.random() > 0.6 || round === maxRounds - 1 || round === Math.floor(maxRounds / 2));
+
+//     if (triggerConvergence) {
+//         Logger.log(`Convergence triggered at round ${round}.`);
+//         convergenceActive = true;
+//         leadingInstance = sortedInstances[sortedInstances.length - 1]; // Exclude the leading instance
+//     }
+
+//     // Check if convergence is complete
+//     if (convergenceActive) {
+//         const leadingCount = instanceCounts[leadingInstance];
+//         const allCaughtUp = Object.values(instanceCounts).every(count => count >= leadingCount);
+
+//         if (allCaughtUp) {
+//             Logger.log(`Convergence complete at round ${round}.`);
+//             convergenceActive = false;
+//             leadingInstance = null; // Reset leading instance
+//         }
+//     }
+
+//     // Apply bias
+//     globalOrder.forEach((subOrderer, subOrderIndex) => {
+//         const biasedInteractions = [];
+//         const otherInteractions = [];
+
+//         subOrderer.forEach(index => {
+//             const interaction = pendingInteractionsStruct[index];
+//             const instanceID = BigInt(interaction.instanceID || interaction[0]);
+//             const interactionName = interaction.name || interaction[3];
+
+//             if (convergenceActive) {
+//                 // During convergence, exclude leading instance
+//                 if (
+//                     instanceID.toString() !== leadingInstance &&
+//                     interactionName === "PurchaseOrder"
+//                 ) {
+//                     biasedInteractions.push(index);
+//                 } else {
+//                     otherInteractions.push(index);
+//                 }
+//             } else {
+//                 // Randomly select instances outside convergence
+//                 if (
+//                     Math.random() > 0.5 &&
+//                     interactionName === "PurchaseOrder"
+//                 ) {
+//                     biasedInteractions.push(index);
+//                 } else {
+//                     otherInteractions.push(index);
+//                 }
+//             }
+//         });
+
+//         // Update the specific subOrderer in the globalOrder
+//         globalOrder[subOrderIndex] = [...biasedInteractions, ...otherInteractions];
+//     });
+
+//     return globalOrder;
+// }
+
+
+
+/**
+ * Function to check if a flattened global order causes conflicts.
+ * A conflict occurs when the same index appears out of order, creating a cycle.
+ *
+ * @param {Array<Array<number>>} globalOrder - Array of subarrays representing each orderer's interactions.
+ * @returns {boolean} - True if a conflict is detected, false otherwise.
+ */
+function checkConflict(globalOrder) {
+    let orderedInteractions = []; // Simulate the domain's ordered_interactions
+
+    for (let i = 0; i < globalOrder.length; i++) {
+        const subArray = globalOrder[i];
+        let anchorIndex = -1; // Reset the anchor index for each subArray
+
+        for (let j = 0; j < subArray.length; j++) {
+            const currentIndex = subArray[j];
+
+            // Check if the interaction exists in orderedInteractions
+            const existingIndex = orderedInteractions.indexOf(currentIndex);
+
+            if (existingIndex !== -1) {
+                // Interaction already exists, check for conflicts
+                if (existingIndex >= anchorIndex) {
+                    anchorIndex = existingIndex; // Update the anchor to the latest position
+                } else {
+                    // Conflict detected: interaction appears out of sequence
+                    return true;
+                }
+            } else {
+                // Add interaction to orderedInteractions
+                orderedInteractions.push(currentIndex);
+                anchorIndex = orderedInteractions.length - 1; // Update the anchor to the latest addition
+            }
+        }
+    }
+
+    // No conflicts detected
+    return false;
 }
 
 async function logEvent(eventName, eventData, transactionHash) {
@@ -665,6 +1028,7 @@ async function logEvent(eventName, eventData, transactionHash) {
         gasUsed: receipt.gasUsed.toString(),
         blockNumber: receipt.blockNumber.toString(),
         timestamp: new Date().toISOString(),
+        round,
     });
 }
 
@@ -734,7 +1098,7 @@ function saveDiscoLog(dir, fileName) {
     const filePath = path.join(dir, `${fileName}.csv`);
     try {
         fs.writeFileSync(filePath, csvData);
-        console.log(`Disco CSV file has been written successfully to ${filePath}!`);
+        Logger.log(`Disco CSV file has been written successfully to ${filePath}!`);
     } catch (err) {
         console.error('Error writing to CSV file', err);
     }
@@ -749,10 +1113,38 @@ function writeJsonToFile(dir, filename, data) {
     // Define the full path for the file
     const filePath = path.join(dir, `${filename}.json`);
 
+    // Convert data to JSON, handling BigInt values
+    const jsonData = JSON.stringify(data, (key, value) =>
+        typeof value === 'bigint' ? value.toString() : value,
+        2
+    );
+
     // Write the JSON data to the file
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
-    // console.log(`Data written to: ${filePath}`);
+    fs.writeFileSync(filePath, jsonData, 'utf8');
+    console.log(`Data written to: ${filePath}`);
 }
+
+
+const Logger = (() => {
+    let enabled = logging; // Logging is enabled by default
+
+    // Function to enable or disable logging
+    function setEnabled(state) {
+        enabled = state;
+    }
+
+    // Function to log messages if logging is enabled
+    function log(message) {
+        if (enabled) {
+            console.log(message);
+        }
+    }
+
+    return {
+        setEnabled,
+        log,
+    };
+})();
 
 main().catch((error) => {
     console.error(error);

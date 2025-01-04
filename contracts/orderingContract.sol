@@ -12,9 +12,10 @@ import "hardhat/console.sol";
 contract OrderingContract {
     // Contract Variables
     IProcessContract public process;
-    uint public block_interval = 5; // Blocks for voting interval
+    uint public block_interval = 4; // Blocks for voting interval
     uint public index_block = 0; // Starting block for the epoch
-    uint public domain_count = 0; // Counter for domains, domain 0 is reserved
+    uint public domain_count = 0; // Counter for domains, domain 0 is reserved for isolated interactions
+    uint public strategy = 0; // Orderer selection strategy, 0: Intermediate (default); 1: All, 2: External + Intermediate, 3: External + All
 
     // Structures
     struct Interaction {
@@ -90,9 +91,10 @@ contract OrderingContract {
      * @dev Constructor to initialize the process contract.
      * @param processContractAddress The address of the process contract.
      */
-    constructor(address processContractAddress) {
+    constructor(address processContractAddress, uint _strategy) {
         require(processContractAddress != address(0), "Invalid address");
         process = IProcessContract(processContractAddress);
+        strategy = _strategy;
     }
 
     /**
@@ -226,6 +228,17 @@ contract OrderingContract {
     }
 
     /**
+     * @notice Retrieve ordered interactions of a specific epoch.
+     * @param epochId The ID of the epoch to fetch.
+     * @return An array of ordered interaction indices for the specified epoch.
+     */
+    function getOrderedInteractionsForEpoch(
+        uint epochId
+    ) external view returns (uint[] memory) {
+        return epochs[epochId].ordered_interactions;
+    }
+
+    /**
      * @notice Check if voting is currently allowed.
      */
     function canVote() public view returns (bool) {
@@ -315,6 +328,10 @@ contract OrderingContract {
             address sender = interaction.sender;
             address receiver = interaction.receiver;
             uint domainID = interaction.domain;
+
+            if (domainID == 0) {
+                continue;
+            }
 
             // Add sender to the orderer list if not already added
             if (!isOrderer(domainID, sender)) {
@@ -444,8 +461,20 @@ contract OrderingContract {
         );
 
         updateDomains();
-        updateOrderersAll(); // Fallback Strategy: updateOrderersAll || updateOrderersIntermediate
-        updateOrderersExternal(); // External Strategy
+
+        if (strategy == 0) {
+            updateOrderersIntermediate();
+        } else if (strategy == 1) {
+            updateOrderersAll();
+        } else if (strategy == 2) {
+            updateOrderersIntermediate();
+            updateOrderersExternal();
+        } else if (strategy == 3) {
+            updateOrderersAll();
+            updateOrderersExternal();
+        } else {
+            revert("Invalid strategy");
+        }
     }
 
     /**
@@ -487,32 +516,32 @@ contract OrderingContract {
 
         domain.vote_count++;
 
-        uint anchorIndex = 0;
-        uint existingIndex = 0;
-
+        int anchorIndex = -1; // Initialize to -1 to represent no anchor yet
         for (uint i = 0; i < indicesToReorder.length; i++) {
             uint currentIndex = indicesToReorder[i];
 
             // Check if the interaction exists in domain's ordered_interactions
-            bool existsInOrdered = false;
+            int existingIndex = -1; // Use -1 for "not found"
             for (uint j = 0; j < domain.ordered_interactions.length; j++) {
                 if (domain.ordered_interactions[j] == currentIndex) {
-                    existsInOrdered = true;
-                    existingIndex = j;
+                    existingIndex = int(j); // Cast uint to int for comparison
                     break;
                 }
             }
-
-            if (existsInOrdered) {
+            if (existingIndex != -1) {
+                // Interaction exists, check conflict
                 if (existingIndex >= anchorIndex) {
-                    anchorIndex = existingIndex;
+                    anchorIndex = existingIndex; // Update anchor to latest valid position
                 } else {
+                    // Conflict detected
                     domain.status = DomainStatus.Conflict;
                     emit Conflict(domainId);
                     break;
                 }
             } else {
+                // Add interaction to ordered_interactions
                 domain.ordered_interactions.push(currentIndex);
+                anchorIndex = int(domain.ordered_interactions.length - 1); // Update anchor to the latest addition
             }
         }
 
@@ -527,6 +556,81 @@ contract OrderingContract {
             executeInteractions();
         }
     }
+
+    //    function orderInteraction(
+    //     uint domainId,
+    //     uint[] calldata indicesToReorder
+    // ) external duringVote {
+    //     require(
+    //         indicesToReorder.length > 0,
+    //         "Need at least one index to reorder"
+    //     );
+
+    //     require(
+    //         domains[domainId].status == DomainStatus.Pending,
+    //         "Domain is not pending"
+    //     );
+
+    //     Domain storage domain = domains[domainId];
+    //     bool[] memory reorderedFlags = new bool[](pending_interactions.length);
+
+    //     for (uint i = 0; i < indicesToReorder.length; i++) {
+    //         uint index = indicesToReorder[i];
+
+    //         require(
+    //             index < pending_interactions.length,
+    //             "Invalid interaction ID"
+    //         );
+    //         require(
+    //             !reorderedFlags[index],
+    //             "Duplicate interaction ID in the order"
+    //         );
+
+    //         reorderedFlags[index] = true;
+    //     }
+
+    //     domain.vote_count++;
+
+    //     uint anchorIndex = 0;
+    //     uint existingIndex = 0;
+
+    //     for (uint i = 0; i < indicesToReorder.length; i++) {
+    //         uint currentIndex = indicesToReorder[i];
+
+    //         // Check if the interaction exists in domain's ordered_interactions
+    //         bool existsInOrdered = false;
+    //         for (uint j = 0; j < domain.ordered_interactions.length; j++) {
+    //             if (domain.ordered_interactions[j] == currentIndex) {
+    //                 existsInOrdered = true;
+    //                 existingIndex = j;
+    //                 break;
+    //             }
+    //         }
+
+    //         if (existsInOrdered) {
+    //             if (existingIndex >= anchorIndex) {
+    //                 anchorIndex = existingIndex;
+    //             } else {
+    //                 domain.status = DomainStatus.Conflict;
+    //                 emit Conflict(domainId);
+    //                 break;
+    //             }
+    //         } else {
+    //             domain.ordered_interactions.push(currentIndex);
+    //         }
+    //     }
+
+    //     if (
+    //         domain.vote_count == domain.orderers_count &&
+    //         domain.status != DomainStatus.Conflict
+    //     ) {
+    //         domain.status = DomainStatus.Completed;
+    //     }
+
+    //     if (checkAllDomainsStatus()) {
+    //         executeInteractions();
+    //     }
+    // }
 
     /**
      * @notice Allows external orderers to vote on the order of interactions in an epoch.
@@ -588,17 +692,55 @@ contract OrderingContract {
             }
         }
 
+        //***
+
+        // int anchorIndex = -1; // Initialize to -1 to represent no anchor yet
+        // for (uint i = 0; i < indicesToReorder.length; i++) {
+        //     uint currentIndex = indicesToReorder[i];
+
+        //     // Check if the interaction exists in domain's ordered_interactions
+        //     int existingIndex = -1; // Use -1 for "not found"
+        //     for (uint j = 0; j < epoch.ordered_interactions.length; j++) {
+        //         if (epoch.ordered_interactions[j] == currentIndex) {
+        //             existingIndex = int(j); // Cast uint to int for comparison
+        //             break;
+        //         }
+        //     }
+
+        //     if (existingIndex != -1) {
+        //         // Interaction exists, check conflict
+        //         if (existingIndex >= anchorIndex) {
+        //             anchorIndex = existingIndex; // Update anchor to latest valid position
+        //         } else {
+        //             // Conflict detected
+        //             epoch.status = EpochStatus.Conflict;
+        //             emit Conflict(index_block);
+        //             break;
+        //         }
+        //     } else {
+        //         // Add interaction to ordered_interactions
+        //         epoch.ordered_interactions.push(currentIndex);
+        //         anchorIndex = int(epoch.ordered_interactions.length - 1); // Update anchor to the latest addition
+        //     }
+        // }
+
+        //****
+
         if (
             epoch.vote_count == epoch.validOrderersCount &&
             epoch.status != EpochStatus.Conflict
         ) {
             epoch.status = EpochStatus.Completed;
             executeInteractionsExternal();
-        }
-
-        else if (epoch.status == EpochStatus.Conflict){
-            // If conflict exists in epoch we reset 
+        } else if (epoch.status == EpochStatus.Conflict) {
+            // If conflict exists in epoch we reset
+            for (uint i = 1; i <= domain_count; i++) {
+                if (domains[i].status == DomainStatus.Pending) {
+                    domains[i].status = DomainStatus.Completed;
+                }
+            }
             resetData();
+            emit InteractionPoolOpen();
         }
     }
 
@@ -762,8 +904,9 @@ contract OrderingContract {
             j < epochs[index_block].ordered_interactions.length;
             j++
         ) {
-            uint instanceId = pending_interactions[j].instance;
-            string memory taskName = pending_interactions[j].task;
+            uint interactionIndex = epochs[index_block].ordered_interactions[j];
+            uint instanceId = pending_interactions[interactionIndex].instance;
+            string memory taskName = pending_interactions[interactionIndex].task;
 
             // Using call method to avoid cascading reverts
             (bool success, bytes memory data) = address(process).call(
@@ -835,10 +978,15 @@ contract OrderingContract {
             require(pending_interactions[i].domain == 0);
             uint instanceId = pending_interactions[i].instance;
             string memory taskName = pending_interactions[i].task;
-            address(process).call(
-                abi.encodeWithSignature("executeTask", instanceId, taskName)
+            (bool success, bytes memory data) = address(process).call(
+                abi.encodeWithSignature(
+                    "executeTask(uint256,string)",
+                    instanceId,
+                    taskName
+                )
             );
         }
+
         resetData();
         emit InteractionPoolOpen();
     }

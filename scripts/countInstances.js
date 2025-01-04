@@ -40,7 +40,7 @@ function countRelativeOrderPairs(data) {
 }
 
 // Example usage: Load JSON data from file and call the function
-const jsonData = JSON.parse(fs.readFileSync('/mnt/c/Users/atwih/My Documents/GitHub/transparent-ordering/data/randomLog.json', 'utf8'));
+const jsonData = JSON.parse(fs.readFileSync('/Users/hassanatwi/transparent-ordering/data/randomLog.json', 'utf8'));
 const result = countRelativeOrderPairs(jsonData);
 
 console.log("Count of each pair competing for relative order:");
