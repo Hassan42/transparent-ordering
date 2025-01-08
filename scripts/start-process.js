@@ -58,6 +58,8 @@ let conflictCheckProbability = 90;
 
 let round = 0;
 
+let epochs_count = 0;
+
 const domains = [];
 const externalOrderer = []; //for logging
 
@@ -100,6 +102,8 @@ async function main() {
     const randomLog = await setupRandomLog(randomLogArg, instancesDetails.length);
 
     await executeProcessInstances(randomLog);
+
+    await extractDomains();
 
     saveResults();
 
@@ -297,6 +301,7 @@ async function executeTaskOC(instanceID, taskName, participant) {
             await new Promise((resolve) => {
                 orderingContract.once("InteractionPoolOpen", () => {
                     Logger.log(`${instanceID} , ${taskName}, end epoch`)
+                    epochs_count++;
                     resolve();
                 });
             });
@@ -640,29 +645,32 @@ async function listenForEvents() {
     Logger.log("Listening for events...");
 }
 
+
 async function orderingVotes() {
+
+    const pendingInteractionsStruct = await orderingContract.getPendingInteractionsStruct();
+    console.log("INTERS:", pendingInteractionsStruct);
+    Logger.log(`Epoch Voting Phase ${epochs_count}`);
     const indexBlock = await orderingContract.index_block();
     Logger.log(`Index blocks ${indexBlock}`);
 
     const domainCount = await orderingContract.domain_count();
     const conflictAllowed = Math.random() * 100 >= conflictCheckProbability;
 
+    const canRelease = await orderingContract.canRelease();
+
+    console.log("can release:,", canRelease);
+
     // const interactions = await orderingContract.getPendingInteractionsStruct();
 
-    if (domainCount === 0) {
+    if (canRelease) {
         try {
+            Logger.log("Releasing isolated interactions.");
             await orderingContract.release();
-            checkAndEmitCanVoteEvent();
-            return;
         } catch (error) {
-            Logger.error("Failed to release isolated interactions.", error);
+            console.error("Failed to release isolated interactions.");
+            console.log(await orderingContract.index_block());
         }
-    }
-
-    for (let i = 1; i <= domainCount; i++) {
-        const domain = await orderingContract.getDomainByIndex(i);
-        domains.push(domain);
-        // Logger.log(domain);
     }
 
     const externalOrderers = await orderingContract.getExternalOrderersForEpoch(indexBlock);
@@ -672,8 +680,6 @@ async function orderingVotes() {
         Logger.log("External Orderers Voting");
         externalOrderer.push(validExternalOrderers);
 
-        const pendingInteractionsStruct = await orderingContract.getPendingInteractionsStruct();
-        console.log("INTERS:", pendingInteractionsStruct);
 
         await handleVoting(
             validExternalOrderers,
@@ -693,8 +699,8 @@ async function orderingVotes() {
             }
 
             console.log("DOMAIN:", domain);
-            const pendingInteractionsStruct = await orderingContract.getPendingInteractionsStruct();
-            console.log("INTERS:", pendingInteractionsStruct);
+            // const pendingInteractionsStruct = await orderingContract.getPendingInteractionsStruct();
+            // console.log("INTERS:", pendingInteractionsStruct);
 
             await handleVoting(
                 domain.orderers,
@@ -705,7 +711,7 @@ async function orderingVotes() {
             );
         }
     }
-
+    await makeDelay(500);
     checkAndEmitCanVoteEvent();
 }
 
@@ -785,7 +791,7 @@ async function handleVoting(orderers, getInteractions, submitOrder, conflictAllo
             const tx = await submitOrder(order);
             await tx.wait();
         } catch (error) {
-            Logger.log(`${context} Orderer ${orderer} failed to submit order.`);
+            console.log(`${context} Orderer ${orderer} failed to submit order. ${error}`);
         }
     }
 
@@ -822,7 +828,7 @@ async function applyRoundRobinBias(globalOrder) {
                 if (Math.floor(round / 5) % 2 === 0) {
                     // Bias towards instanceID 3 and 4 for even rounds
                     if (instanceID === 3n || instanceID === 4n) {
-                        Logger.log(`Biasing PurchaseOrder for instance 3 or 4: ${index}`);
+                        // Logger.log(`Biasing PurchaseOrder for instance 3 or 4: ${index}`);
                         biasedInteractions.push(index);
                     } else {
                         otherInteractions.push(index);
@@ -830,7 +836,7 @@ async function applyRoundRobinBias(globalOrder) {
                 } else {
                     // Bias towards instanceID 1 and 2 for odd rounds
                     if (instanceID === 1n || instanceID === 2n) {
-                        Logger.log(`Biasing PurchaseOrder for instance 1 or 2: ${index}`);
+                        // Logger.log(`Biasing PurchaseOrder for instance 1 or 2: ${index}`);
                         biasedInteractions.push(index);
                     } else {
                         otherInteractions.push(index);
@@ -843,7 +849,7 @@ async function applyRoundRobinBias(globalOrder) {
                 if (Math.floor(round / 5) % 2 === 0) {
                     // Bias towards instanceID 1 and 3 for even rounds
                     if (instanceID === 1n || instanceID === 3n) {
-                        Logger.log(`Biasing RestockRequest for instance 1 or 3: ${index}`);
+                        // Logger.log(`Biasing RestockRequest for instance 1 or 3: ${index}`);
                         biasedInteractions.push(index);
                     } else {
                         otherInteractions.push(index);
@@ -851,7 +857,7 @@ async function applyRoundRobinBias(globalOrder) {
                 } else {
                     // Bias towards instanceID 2 and 4 for odd rounds
                     if (instanceID === 2n || instanceID === 4n) {
-                        Logger.log(`Biasing RestockRequest for instance 2 or 4: ${index}`);
+                        // Logger.log(`Biasing RestockRequest for instance 2 or 4: ${index}`);
                         biasedInteractions.push(index);
                     } else {
                         otherInteractions.push(index);
@@ -870,7 +876,7 @@ async function applyRoundRobinBias(globalOrder) {
                     console.log(cancelConfirmCounts);
 
                     if (interactionName === taskToBias) {
-                        Logger.log(`Balancing task ${interactionName} for instance ${instanceID}: ${index}`);
+                        // Logger.log(`Balancing task ${interactionName} for instance ${instanceID}: ${index}`);
                         biasedInteractions.push(index);
                         // cancelConfirmCounts[interactionName]++; // Increment the task count
                     } else {
@@ -992,30 +998,41 @@ function checkConflict(globalOrder) {
         const subArray = globalOrder[i];
         let anchorIndex = -1; // Reset the anchor index for each subArray
 
+        // Add the subArray to the orderedInteractions while maintaining the order
         for (let j = 0; j < subArray.length; j++) {
             const currentIndex = subArray[j];
-
-            // Check if the interaction exists in orderedInteractions
             const existingIndex = orderedInteractions.indexOf(currentIndex);
 
-            if (existingIndex !== -1) {
-                // Interaction already exists, check for conflicts
+            if (existingIndex === -1) {
+                // Element does not exist, insert at the top if no anchor, otherwise after the anchor
+                if (anchorIndex === -1) {
+                    orderedInteractions.unshift(currentIndex); // Insert at the top
+                } else {
+                    orderedInteractions.splice(anchorIndex + 1, 0, currentIndex); // Insert after the anchor
+                }
+                anchorIndex = orderedInteractions.indexOf(currentIndex); // Update the anchor index
+            } else {
+                // If element already exists, check for conflicts
                 if (existingIndex >= anchorIndex) {
                     anchorIndex = existingIndex; // Update the anchor to the latest position
                 } else {
                     // Conflict detected: interaction appears out of sequence
                     return true;
                 }
-            } else {
-                // Add interaction to orderedInteractions
-                orderedInteractions.push(currentIndex);
-                anchorIndex = orderedInteractions.length - 1; // Update the anchor to the latest addition
             }
         }
     }
 
     // No conflicts detected
     return false;
+}
+
+async function extractDomains(){
+        const domainCount = await orderingContract.domain_count();
+        for (let i = 1; i <= domainCount; i++) {
+        const domain = await orderingContract.getDomainByIndex(i);
+        domains.push(domain);
+    }
 }
 
 async function logEvent(eventName, eventData, transactionHash) {
