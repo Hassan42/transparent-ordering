@@ -36,7 +36,6 @@ build/Release
 # Dependency directories
 node_modules/
 jspm_packages/
-data/
 # TypeScript cache
 *.tsbuildinfo
 
@@ -92,5 +91,3 @@ dist
 QBFT-Network/
 artifacts/
 cache/
-
-data/oc,2,500,censor/domains.json
