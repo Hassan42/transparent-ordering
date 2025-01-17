@@ -12,7 +12,7 @@ import "hardhat/console.sol";
 contract OrderingContract {
     // Contract Variables
     IProcessContract public process;
-    uint public block_interval = 4; // Blocks for voting interval
+    uint public block_interval = 5; // Blocks for voting interval
     uint public index_block = 0; // Starting block for the epoch
     uint public domain_count = 0; // Counter for domains, domain 0 is reserved for isolated interactions
     uint public strategy = 0; // Orderer selection strategy, 0: Intermediate (default); 1: All, 2: External + Intermediate, 3: External + All

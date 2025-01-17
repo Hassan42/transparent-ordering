@@ -40,6 +40,9 @@ const nonceMap = new Map();
 // Event log
 const logs = [];
 
+// Store gas usage by round
+const roundMetrics = {};
+
 // Delays between ech round
 const ROUND_DELAY = 1500;
 
@@ -91,8 +94,9 @@ async function main() {
 
     await deployContracts();
 
-    if (setting == "OC") { 
-        checkAndEmitCanVoteEvent(); }
+    if (setting == "OC") {
+        checkAndEmitCanVoteEvent();
+    }
 
     listenForEvents();
 
@@ -138,6 +142,8 @@ async function executeProcessInstances(randomLog) {
     for (let i = 0; i < randomLog.length; i++) {
         const { instances: instanceOrder, delay } = randomLog[i];
 
+        const roundStartTime = Date.now(); // Record the start time
+
         await Promise.all(instanceOrder.map(async ({ instanceID, deferredChoice }) => {
             const instance = instancesDetails.find(inst => inst.instanceID === instanceID);
             if (!instance) {
@@ -148,13 +154,25 @@ async function executeProcessInstances(randomLog) {
         }));
 
         await resetState();
-        saveResults();
 
         progressBar.update(i + 1);
 
         if (delay) await makeDelay(ROUND_DELAY);
 
-        round+=1;
+        const roundEndTime = Date.now(); // Record the end time
+        const roundDuration = roundEndTime - roundStartTime;
+
+        if (!roundMetrics[round]) {
+            roundMetrics[round] = {
+                duration: 0,
+            };
+        }
+
+        roundMetrics[round].duration = roundDuration;
+
+        saveResults();
+
+        round += 1;
     }
 
     progressBar.stop();
@@ -165,6 +183,7 @@ function saveResults() {
     writeJsonToFile(dataDir, "logs", logs);
     saveDiscoLog(dataDir, "discoLog");
     writeJsonToFile(dataDir, "domains", domains);
+    writeJsonToFile(dataDir, "roundMetrics", roundMetrics);
     writeJsonToFile(dataDir, "externalOrderers", externalOrderer);
 }
 
@@ -245,6 +264,7 @@ async function executeTask(instanceID, taskName, participant) {
 
             // Wait for the transaction to complete and return the receipt
             const receipt = await txResponse.wait();
+            storeGasUsage(round, receipt);
 
             // Update nonce map to next expected nonce after successful transaction
             nonceMap.set(participant.publicKey, currentNonce);
@@ -293,6 +313,7 @@ async function executeTaskOC(instanceID, taskName, participant) {
 
             // Wait for the transaction to complete and return the receipt
             const receipt = await txResponse.wait();
+            storeGasUsage(round, receipt);
 
             // Update nonce map to next expected nonce after successful transaction
             nonceMap.set(participant.publicKey, currentNonce);
@@ -301,7 +322,6 @@ async function executeTaskOC(instanceID, taskName, participant) {
             await new Promise((resolve) => {
                 orderingContract.once("InteractionPoolOpen", () => {
                     Logger.log(`${instanceID} , ${taskName}, end epoch`)
-                    epochs_count++;
                     resolve();
                 });
             });
@@ -416,11 +436,12 @@ async function deployContracts() {
         processContract = await ProcessContract.deploy();
         Logger.log(`ProcessContract deployed at: ${processContract.target}`);
 
-        try{
-        const OrderingContract = await ethers.getContractFactory("OrderingContract");
-        orderingContract = await OrderingContract.deploy(processContract.target, strategy);
-        Logger.log(`OrderingContract deployed at: ${orderingContract.target}`);}
-        catch(error){
+        try {
+            const OrderingContract = await ethers.getContractFactory("OrderingContract");
+            orderingContract = await OrderingContract.deploy(processContract.target, strategy);
+            Logger.log(`OrderingContract deployed at: ${orderingContract.target}`);
+        }
+        catch (error) {
             console.log(error);
         }
 
@@ -595,6 +616,16 @@ async function listenForEvents() {
         Logger.log(`conflict detected in domain in ${domainId}`);
     });
 
+    orderingContract.on("InteractionPoolOpen", async (event) => {
+        const transactionHash = event.log.transactionHash;
+        epochs_count++;
+        const eventData = {
+            epochs_count,
+        };
+        await logEvent("NewEpoch", eventData, transactionHash);
+        Logger.log(`new epoch. ${epochs_count}`);
+    });
+
     // Listen for TaskCompleted event
     processContract.on("TaskCompleted", async (instanceID, taskName, event) => {
         // Retrieve participant role based on taskName
@@ -611,20 +642,22 @@ async function listenForEvents() {
         }
 
         //Increase confirm order
-        if (taskName == "ConfirmOrder"){
+        if (taskName == "ConfirmOrder") {
             // instanceCounts[instanceID.toString()] = (instanceCounts[instanceID.toString()] || 0) + 1;
         }
 
-        if (taskName == "CancelOrder"){
-            if(instanceID.toString() == 1 || instanceID.toString() == 2){
-            cancelConfirmCounts["CancelOrder"]++;}
+        if (taskName == "CancelOrder") {
+            if (instanceID.toString() == 2 || instanceID.toString() == 3) {
+                cancelConfirmCounts["CancelOrder"]++;
+            }
         }
 
-        if (taskName == "ConfirmRestock"){
-            if(instanceID.toString() == 1 || instanceID.toString() == 2){
-                cancelConfirmCounts["ConfirmRestock"]++;}
+        if (taskName == "ConfirmRestock") {
+            if (instanceID.toString() == 2 || instanceID.toString() == 3) {
+                cancelConfirmCounts["ConfirmRestock"]++;
+            }
         }
-        
+
         const eventData = {
             instanceID: instanceID.toString(),
             taskName: taskName,
@@ -650,7 +683,7 @@ async function orderingVotes() {
 
     const pendingInteractionsStruct = await orderingContract.getPendingInteractionsStruct();
     console.log("INTERS:", pendingInteractionsStruct);
-    Logger.log(`Epoch Voting Phase ${epochs_count}`);
+    // Logger.log(`Epoch Voting Phase ${epochs_count}`);
     const indexBlock = await orderingContract.index_block();
     Logger.log(`Index blocks ${indexBlock}`);
 
@@ -789,7 +822,8 @@ async function handleVoting(orderers, getInteractions, submitOrder, conflictAllo
 
         try {
             const tx = await submitOrder(order);
-            await tx.wait();
+            const receipt = await tx.wait();
+            storeGasUsage(round, receipt);
         } catch (error) {
             console.log(`${context} Orderer ${orderer} failed to submit order. ${error}`);
         }
@@ -827,7 +861,8 @@ async function applyRoundRobinBias(globalOrder) {
             if (interactionName === "PurchaseOrder") {
                 if (Math.floor(round / 5) % 2 === 0) {
                     // Bias towards instanceID 3 and 4 for even rounds
-                    if (instanceID === 3n || instanceID === 4n) {
+                    //instanceID === 3n || instanceID === 4n
+                    if (instanceID === 2n || instanceID === 3n) {
                         // Logger.log(`Biasing PurchaseOrder for instance 3 or 4: ${index}`);
                         biasedInteractions.push(index);
                     } else {
@@ -835,7 +870,8 @@ async function applyRoundRobinBias(globalOrder) {
                     }
                 } else {
                     // Bias towards instanceID 1 and 2 for odd rounds
-                    if (instanceID === 1n || instanceID === 2n) {
+                    //instanceID === 1n || instanceID === 2n
+                    if (instanceID === 1n || instanceID === 4n) {
                         // Logger.log(`Biasing PurchaseOrder for instance 1 or 2: ${index}`);
                         biasedInteractions.push(index);
                     } else {
@@ -843,12 +879,12 @@ async function applyRoundRobinBias(globalOrder) {
                     }
                 }
             }
-
             // RestockRequest Bias (Round-Based)
             else if (interactionName === "RestockRequest") {
                 if (Math.floor(round / 5) % 2 === 0) {
                     // Bias towards instanceID 1 and 3 for even rounds
-                    if (instanceID === 1n || instanceID === 3n) {
+                    //instanceID === 1n || instanceID === 3n
+                    if (instanceID === 1n || instanceID === 2n) {
                         // Logger.log(`Biasing RestockRequest for instance 1 or 3: ${index}`);
                         biasedInteractions.push(index);
                     } else {
@@ -856,7 +892,8 @@ async function applyRoundRobinBias(globalOrder) {
                     }
                 } else {
                     // Bias towards instanceID 2 and 4 for odd rounds
-                    if (instanceID === 2n || instanceID === 4n) {
+                    //instanceID === 2n || instanceID === 4n
+                    if (instanceID === 3n || instanceID === 4n) {
                         // Logger.log(`Biasing RestockRequest for instance 2 or 4: ${index}`);
                         biasedInteractions.push(index);
                     } else {
@@ -867,7 +904,8 @@ async function applyRoundRobinBias(globalOrder) {
 
             // CancelOrder and ConfirmRestock Balancing
             else if (interactionName === "CancelOrder" || interactionName === "ConfirmRestock") {
-                if (instanceID === 1n || instanceID === 2n) {
+                //instanceID === 1n || instanceID === 2n
+                if (instanceID === 2n || instanceID === 3n) {
                     // Determine the task with the lowest count
                     const taskToBias = cancelConfirmCounts["CancelOrder"] <= cancelConfirmCounts["ConfirmRestock"]
                         ? "CancelOrder"
@@ -882,11 +920,11 @@ async function applyRoundRobinBias(globalOrder) {
                     } else {
                         otherInteractions.push(index);
                     }
-                } else {
+                }
+                else {
                     otherInteractions.push(index);
                 }
             }
-
             // Default: Other interactions
             else {
                 otherInteractions.push(index);
@@ -1027,9 +1065,9 @@ function checkConflict(globalOrder) {
     return false;
 }
 
-async function extractDomains(){
-        const domainCount = await orderingContract.domain_count();
-        for (let i = 1; i <= domainCount; i++) {
+async function extractDomains() {
+    const domainCount = await orderingContract.domain_count();
+    for (let i = 1; i <= domainCount; i++) {
         const domain = await orderingContract.getDomainByIndex(i);
         domains.push(domain);
     }
@@ -1139,6 +1177,28 @@ function writeJsonToFile(dir, filename, data) {
     // Write the JSON data to the file
     fs.writeFileSync(filePath, jsonData, 'utf8');
     console.log(`Data written to: ${filePath}`);
+}
+
+/**
+ * Function to store gas usage for a specific round.
+ * @param {number} round - The current round number.
+ * @param {Object} receipt - The transaction receipt containing gas usage and transaction details.
+ */
+function storeGasUsage(round, receipt) {
+    // Initialize the round if it doesn't exist
+    if (!roundMetrics[round]) {
+        roundMetrics[round] = {
+            gasUsage: [], // Initialize an array to store gas usage
+        };
+    }
+
+    // Extract gas used and transaction hash
+    const gasUsed = receipt.gasUsed.toString(); // Convert gas used to a string
+
+    // Add the gas usage for the transaction to the round
+    roundMetrics[round].gasUsage.push({
+        gasUsed: gasUsed,
+    });
 }
 
 

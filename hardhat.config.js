@@ -17,7 +17,7 @@ module.exports = {
   defaultNetwork: "goquorum",
   networks: {
     goquorum: {
-      url: "http://localhost:8550",
+      url: "http://localhost:8552",
     },
   },
 };

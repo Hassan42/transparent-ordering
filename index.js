@@ -241,8 +241,8 @@ app.post('/create-network', (req, res) => {
             --verbosity 5 \\
             --syncmode full \\
             --emitcheckpoints \\
-            --http --http.addr 0.0.0.0 --http.port 8550 --http.corsdomain "*" --http.vhosts "*" \\
-            --ws --ws.addr 0.0.0.0 --ws.port 8551 --ws.origins "*" \\
+            --http --http.addr 0.0.0.0 --http.port 8552 --http.corsdomain "*" --http.vhosts "*" \\
+            --ws --ws.addr 0.0.0.0 --ws.port 8553 --ws.origins "*" \\
             --http.api admin,eth,debug,net,txpool,personal,web3,istanbul \\
             --ws.api admin,eth,debug,net,txpool,personal,web3,istanbul \\
             --unlock "$ACCOUNT_ADDRESS" \\
@@ -259,8 +259,8 @@ app.post('/create-network', (req, res) => {
             image: 'your-quorum-image',
             ports: [
                 `30305:30305`,  // Node communication port
-                `8550:8550`,    // HTTP port mapped externally for API access
-                `8551:8551`     // WebSocket port mapped externally
+                `8552:8552`,    // HTTP port mapped externally for API access
+                `8553:8553`     // WebSocket port mapped externally
             ],
             volumes: [
                 `${memberDataPath}:/data`
@@ -318,7 +318,7 @@ app.post('/start-network', (req, res) => {
 
             res.json({ message: 'Network started successfully.' });
         } catch (error) {
-            console.error(`Error starting Docker Compose: ${error.message}`);
+            console.error(`Error starting Docker Compose: ${error}`);
             return res.status(500).json({ message: 'Failed to start the network.', error: error.message });
         }
     } catch (error) {
