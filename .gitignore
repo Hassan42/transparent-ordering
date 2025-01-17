@@ -93,3 +93,4 @@ QBFT-Network/
 artifacts/
 cache/
 
+data/oc,2,500,censor/domains.json
