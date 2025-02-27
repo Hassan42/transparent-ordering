@@ -228,11 +228,6 @@ contract ProcessContract {
         uint256 priceIncrease = 0;
         
         if (globalData.requestCount > 1) {
-            // priceIncrease = globalData.demandFactor;
-            //     (globalData.basePrice *
-            //         globalData.demandFactor *
-            //         globalData.requestCount) /
-            //     (100 * SCALING_FACTOR); // Scale down by the scaling factor
             priceIncrease = globalData.demandFactor;
         }
         

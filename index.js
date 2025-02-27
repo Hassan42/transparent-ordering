@@ -189,7 +189,7 @@ app.post('/create-network', (req, res) => {
             fs.writeFileSync(path.join(nodeDataPath, 'nodeConfig.json'), JSON.stringify(nodeConfig, null, 2));
 
             dockerCompose.services[`node${i}`] = {
-                image: 'your-quorum-image',
+                image: 'haccan/quorum-censor',
                 ports: [
                     `30303`,   // Map base port for Quorum
                     `8546`,      // Map WebSocket port
@@ -256,7 +256,7 @@ app.post('/create-network', (req, res) => {
 
         // Add member0 to Docker compose with updated ports
         dockerCompose.services['member0'] = {
-            image: 'your-quorum-image',
+            image: 'haccan/quorum-censor',
             ports: [
                 `30305:30305`,  // Node communication port
                 `8552:8552`,    // HTTP port mapped externally for API access

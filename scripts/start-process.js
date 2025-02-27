@@ -68,7 +68,7 @@ const externalOrderer = []; //for logging
 
 async function main() {
 
-    const randomLogArg = process.env.RANDOM_LOG_PATH; // Get randomLog from command-line arguments if provided
+    const randomLogArg = process.env.EVENT_LOG_PATH; // Get randomLog from command-line arguments if provided
     strategy = process.env.STRATEGY;
     rounds = process.env.ROUNDS;
     logging = process.env.LOGGING;
@@ -937,90 +937,6 @@ async function applyRoundRobinBias(globalOrder) {
 
     return globalOrder;
 }
-
-
-
-
-
-// let instanceCounts = { "1": 0, "2": 0, "3": 0, "4": 0 }; // Track counts for each instance
-// let leadingInstance = null; // Instance currently leading
-// let convergenceActive = false;
-
-// async function applyRoundRobinBias(globalOrder, maxRounds=500) {
-//     console.log("Instance counts:", instanceCounts);
-//     Logger.log(`Applying bias for round ${round}.`);
-
-//     const pendingInteractionsStruct = await orderingContract.getPendingInteractionsStruct();
-
-//     // Sort instances by interaction counts
-//     const sortedInstances = Object.entries(instanceCounts)
-//         .sort(([, countA], [, countB]) => countA - countB)
-//         .map(([instance]) => instance);
-
-//     // Check if convergence should be triggered
-//     const triggerConvergence = 
-//         !convergenceActive &&
-//         (Math.random() > 0.6 || round === maxRounds - 1 || round === Math.floor(maxRounds / 2));
-
-//     if (triggerConvergence) {
-//         Logger.log(`Convergence triggered at round ${round}.`);
-//         convergenceActive = true;
-//         leadingInstance = sortedInstances[sortedInstances.length - 1]; // Exclude the leading instance
-//     }
-
-//     // Check if convergence is complete
-//     if (convergenceActive) {
-//         const leadingCount = instanceCounts[leadingInstance];
-//         const allCaughtUp = Object.values(instanceCounts).every(count => count >= leadingCount);
-
-//         if (allCaughtUp) {
-//             Logger.log(`Convergence complete at round ${round}.`);
-//             convergenceActive = false;
-//             leadingInstance = null; // Reset leading instance
-//         }
-//     }
-
-//     // Apply bias
-//     globalOrder.forEach((subOrderer, subOrderIndex) => {
-//         const biasedInteractions = [];
-//         const otherInteractions = [];
-
-//         subOrderer.forEach(index => {
-//             const interaction = pendingInteractionsStruct[index];
-//             const instanceID = BigInt(interaction.instanceID || interaction[0]);
-//             const interactionName = interaction.name || interaction[3];
-
-//             if (convergenceActive) {
-//                 // During convergence, exclude leading instance
-//                 if (
-//                     instanceID.toString() !== leadingInstance &&
-//                     interactionName === "PurchaseOrder"
-//                 ) {
-//                     biasedInteractions.push(index);
-//                 } else {
-//                     otherInteractions.push(index);
-//                 }
-//             } else {
-//                 // Randomly select instances outside convergence
-//                 if (
-//                     Math.random() > 0.5 &&
-//                     interactionName === "PurchaseOrder"
-//                 ) {
-//                     biasedInteractions.push(index);
-//                 } else {
-//                     otherInteractions.push(index);
-//                 }
-//             }
-//         });
-
-//         // Update the specific subOrderer in the globalOrder
-//         globalOrder[subOrderIndex] = [...biasedInteractions, ...otherInteractions];
-//     });
-
-//     return globalOrder;
-// }
-
-
 
 /**
  * Function to check if a flattened global order causes conflicts.

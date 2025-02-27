@@ -39,6 +39,7 @@ contract OrderingContract {
         uint vote_count;
         uint[] ordered_interactions;
         uint orderers_count;
+        uint index_block;
     }
 
     struct ExternalOrderer {
@@ -127,7 +128,8 @@ contract OrderingContract {
             address[] memory orderers,
             uint voteCount,
             uint[] memory orderedInteractions,
-            uint orderersCount
+            uint orderersCount,
+            uint indexBlock
         )
     {
         Domain storage domain = domains[domainId];
@@ -146,7 +148,8 @@ contract OrderingContract {
             ordererAddresses,
             domain.vote_count,
             domain.ordered_interactions,
-            domain.orderers_count
+            domain.orderers_count,
+            domain.index_block
         );
     }
 
@@ -835,6 +838,7 @@ contract OrderingContract {
             Domain storage newDomain = domains[domain_count];
             newDomain.id = domain_count;
             newDomain.status = DomainStatus.Pending;
+            newDomain.index_block = index_block;
 
             for (uint k = 0; k < matchCount; k++) {
                 pending_interactions[matchedIndexes[k]].domain = domain_count;

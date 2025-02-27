@@ -1,0 +1,118 @@
+{
+	"info": {
+		"_postman_id": "3ffd2a7b-f926-4e45-acb2-9671835aade5",
+		"name": "transparent-ordering-new",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "12773646"
+	},
+	"item": [
+		{
+			"name": "create network censor",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n    \"customer1\": {\r\n        \"nodeType\": \"normal\"\r\n    },\r\n    \"customer2\": {\r\n        \"nodeType\": \"censor\",\r\n        \"censorTargets\": [\r\n            \"customer1\",\r\n            \"customer3\",\r\n            \"customer4\",\r\n            \"manufacturer1\"\r\n        ]\r\n    },\r\n    \"customer3\": {\r\n        \"nodeType\": \"censor\",\r\n        \"censorTargets\": [\r\n            \"customer4\",\r\n            \"customer1\",\r\n            \"customer2\",\r\n            \"manufacturer1\"\r\n        ]\r\n    },\r\n    \"customer4\": {\r\n        \"nodeType\": \"normal\"\r\n    },\r\n    \"retailer1\": {\r\n        \"nodeType\": \"normal\"\r\n    },\r\n    \"retailer2\": {\r\n        \"nodeType\": \"censor\",\r\n        \"censorTargets\":[\r\n            \"retailer1\"\r\n        ]\r\n    },\r\n    \"manufacturer1\": {\r\n        \"nodeType\": \"normal\"\r\n    }\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{URL}}:{{PORT}}/create-network",
+					"host": [
+						"{{URL}}"
+					],
+					"port": "{{PORT}}",
+					"path": [
+						"create-network"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "create participants configurations",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "[\n  [\"customer1\", \"retailer1\", \"manufacturer1\"], \n  [\"customer2\", \"retailer1\", \"manufacturer1\"],\n  [\"customer3\", \"retailer2\", \"manufacturer1\"], \n  [\"customer4\", \"retailer2\", \"manufacturer1\"] \n]",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{URL}}:{{PORT}}/start-process-instances",
+					"host": [
+						"{{URL}}"
+					],
+					"port": "{{PORT}}",
+					"path": [
+						"start-process-instances"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "start network",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{URL}}:{{PORT}}/start-network",
+					"host": [
+						"{{URL}}"
+					],
+					"port": "{{PORT}}",
+					"path": [
+						"start-network"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "stop network",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{URL}}:{{PORT}}/stop-network",
+					"host": [
+						"{{URL}}"
+					],
+					"port": "{{PORT}}",
+					"path": [
+						"stop-network"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}
