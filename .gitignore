@@ -91,3 +91,5 @@ dist
 QBFT-Network/
 artifacts/
 cache/
+
+.DS_Store
